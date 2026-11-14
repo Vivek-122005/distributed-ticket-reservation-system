@@ -13,11 +13,14 @@ A final-year, production-inspired backend project for high-demand ticket sales. 
 
 ## Run locally
 
-Prerequisites: Java 21 and Docker Desktop.
+Prerequisites: Java 21+, Maven 3.9+ and Docker Desktop.
+
+The repository is a Maven multi-module build (`common`, `inventory-service`, more services to come). See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the full roadmap and [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md) for what was built in each phase and why.
 
 ```bash
 docker compose up -d
-cd inventory-service && mvn spring-boot:run
+mvn install -DskipTests          # builds all modules from the root parent POM
+mvn -pl inventory-service spring-boot:run
 ```
 
 The service starts at `http://localhost:8080`.

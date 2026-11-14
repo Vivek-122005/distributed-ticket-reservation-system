@@ -46,3 +46,20 @@ A running record of **what was built, in which phase, in which part of the syste
   - Issue tracker only — loses the narrative reasoning that a system design project needs.
 - **How it was verified:** reviewed against the existing code so Phase 0 status reflects what is actually implemented.
 - **ADR:** none
+
+### P0.7 — Maven multi-module build with `common` module
+- **Date:** 2026-11-14
+- **Module / files:** `pom.xml` (new root parent), `common/`, `inventory-service/pom.xml`, `.github/workflows/ci.yml`, `README.md`
+- **What was built:** A root aggregator/parent POM (`ticket-reservation-parent`) that inherits from `spring-boot-starter-parent` and lists the modules; a `common` library module reserved for cross-cutting code (event envelope, idempotency, outbox); `inventory-service` re-parented onto the root POM and depending on `common`; CI now builds every module from the root; Testcontainers BOM pinned centrally for upcoming integration tests (P0.10).
+- **Why this approach:**
+  - One parent POM = one place for Java version, Spring Boot version and shared dependency versions → all services stay consistent.
+  - A single `mvn verify` builds modules in dependency order, so a change in `common` immediately breaks any service it affects (caught in CI).
+  - Doing it now, with one service, is cheap; restructuring after 6–8 services exist is not.
+  - `common` is kept strictly cross-cutting (no service domain logic) so services remain independently deployable and don't turn into a distributed monolith.
+- **Also fixed:** added `flyway-database-postgresql`. Spring Boot 3.4 ships Flyway 10, which moved PostgreSQL support into a separate artifact; without it the service fails at startup with "Unsupported Database".
+- **Alternatives considered:**
+  - Separate repository per service (polyrepo) — realistic at large companies, but heavy overhead for one developer: versioning/publishing `common`, many CI pipelines, cross-repo changes.
+  - Independent builds per folder with no parent — duplicated versions drift over time.
+  - Gradle multi-project — equally capable; Maven kept because the project already used it and its declarative POMs are easier to read in a review.
+- **How it was verified:** `mvn verify` from the root (Maven 3.10, JDK 25 compiling with `--release 21`): reactor builds `common` then `inventory-service`, BUILD SUCCESS, both jars produced. No automated tests exist yet (P0.10), and the Flyway startup fix has not been exercised against a running Postgres yet; it will be covered by the Testcontainers setup in P0.10.
+- **ADR:** none

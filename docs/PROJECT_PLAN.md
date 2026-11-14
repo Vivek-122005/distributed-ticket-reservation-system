@@ -320,8 +320,8 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.3 ✅ | Flyway V1 schema + demo event with 100 seats | `V1__initial_schema.sql` |
 | P0.4 ✅ | CI pipeline (`mvn verify`) | `.github/workflows/ci.yml` |
 | P0.5 ✅ | ADR 001 — PostgreSQL is inventory authority | `docs/adr/001-…` |
-| P0.6 ⬜ | Master plan + development log (this document) | `docs/PROJECT_PLAN.md`, `docs/DEVELOPMENT_LOG.md` |
-| P0.7 ⬜ | Convert to Maven multi-module parent + `common` module | root `pom.xml` |
+| P0.6 ✅ | Master plan + development log (this document) | `docs/PROJECT_PLAN.md`, `docs/DEVELOPMENT_LOG.md` |
+| P0.7 ✅ | Convert to Maven multi-module parent + `common` module | root `pom.xml` |
 | P0.8 ⬜ | HLD pack: architecture, capacity, flows, ERD in `docs/hld/` | diagrams |
 | P0.9 ⬜ | API contracts (OpenAPI) for inventory and booking | `docs/api/*.yaml` |
 | P0.10 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
