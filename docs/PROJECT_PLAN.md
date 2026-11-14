@@ -101,6 +101,8 @@ Back-of-envelope numbers that justify the design (to be validated in P9).
 
 ## 4. High-Level Design (HLD)
 
+> Summary only. The full HLD (architecture, capacity, every request flow incl. failures, data model, consistency & failure model) lives in [`hld/`](hld/README.md).
+
 ### 4.1 Architecture
 
 ```mermaid
@@ -201,14 +203,66 @@ erDiagram
     HOLDS ||--o{ SEAT_INVENTORY : locks
     BOOKINGS ||--|| HOLDS : "references (by id, cross-service)"
     BOOKINGS ||--o{ PAYMENTS : "paid by (cross-service)"
-    EVENTS { uuid id PK; string event_code; string status; timestamptz starts_at }
-    SEAT_INVENTORY { uuid id PK; uuid event_id; string section; string seat_code; string status; uuid hold_id; timestamptz hold_expires_at; bigint version }
-    HOLDS { uuid id PK; uuid event_id; uuid user_id; string status; timestamptz expires_at }
-    BOOKINGS { uuid id PK; uuid user_id; uuid hold_id; string status; numeric amount; bigint version }
-    IDEMPOTENCY_KEYS { string key PK; uuid user_id; string request_hash; string status; jsonb response; timestamptz expires_at }
-    OUTBOX { uuid id PK; string aggregate_type; uuid aggregate_id; string event_type; jsonb payload; timestamptz created_at; timestamptz published_at }
-    PAYMENTS { uuid id PK; uuid booking_id UK; string status; numeric amount; string provider_ref }
-    PROCESSED_EVENTS { uuid event_id PK; string consumer; timestamptz processed_at }
+    EVENTS {
+      uuid id PK
+      string event_code
+      string status
+      timestamptz starts_at
+    }
+    SEAT_INVENTORY {
+      uuid id PK
+      uuid event_id
+      string section
+      string seat_code
+      string status
+      uuid hold_id
+      timestamptz hold_expires_at
+      bigint version
+    }
+    HOLDS {
+      uuid id PK
+      uuid event_id
+      uuid user_id
+      string status
+      timestamptz expires_at
+    }
+    BOOKINGS {
+      uuid id PK
+      uuid user_id
+      uuid hold_id
+      string status
+      numeric amount
+      bigint version
+    }
+    IDEMPOTENCY_KEYS {
+      string idem_key PK
+      uuid user_id
+      string request_hash
+      string status
+      jsonb response
+      timestamptz expires_at
+    }
+    OUTBOX {
+      uuid id PK
+      string aggregate_type
+      uuid aggregate_id
+      string event_type
+      jsonb payload
+      timestamptz created_at
+      timestamptz published_at
+    }
+    PAYMENTS {
+      uuid id PK
+      uuid booking_id UK
+      string status
+      numeric amount
+      string provider_ref
+    }
+    PROCESSED_EVENTS {
+      uuid event_id PK
+      string consumer
+      timestamptz processed_at
+    }
 ```
 
 ### 4.7 Kafka topics
@@ -322,7 +376,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.5 ✅ | ADR 001 — PostgreSQL is inventory authority | `docs/adr/001-…` |
 | P0.6 ✅ | Master plan + development log (this document) | `docs/PROJECT_PLAN.md`, `docs/DEVELOPMENT_LOG.md` |
 | P0.7 ✅ | Convert to Maven multi-module parent + `common` module | root `pom.xml` |
-| P0.8 ⬜ | HLD pack: architecture, capacity, flows, ERD in `docs/hld/` | diagrams |
+| P0.8 ✅ | HLD pack: architecture, capacity, flows, ERD in `docs/hld/` | diagrams |
 | P0.9 ⬜ | API contracts (OpenAPI) for inventory and booking | `docs/api/*.yaml` |
 | P0.10 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
 
