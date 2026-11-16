@@ -16,7 +16,8 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * Single entry point of the inventory module; delegates each operation to its own use case.
+ * Single entry point of the inventory module; delegates each operation to its own use case. Hold
+ * creation goes through {@link FilteredCreateHold}, the fast-reject filter in front of the transaction.
  *
  * <p>Pattern: Facade, see docs/lld/DESIGN_PATTERNS.md#9-facade. Besides delegation it does one
  * cross-cutting job: metering (P1.9). It sits outside the use cases' transactions, so the recorded
@@ -24,13 +25,13 @@ import java.util.function.Supplier;
  */
 @Component
 class InventoryFacade implements InventoryApi {
-    private final CreateHoldUseCase createHold;
+    private final FilteredCreateHold createHold;
     private final ConfirmHoldUseCase confirmHold;
     private final ReleaseHoldUseCase releaseHold;
     private final GetHoldUseCase getHold;
     private final HoldMetrics metrics;
 
-    InventoryFacade(CreateHoldUseCase createHold, ConfirmHoldUseCase confirmHold, ReleaseHoldUseCase releaseHold,
+    InventoryFacade(FilteredCreateHold createHold, ConfirmHoldUseCase confirmHold, ReleaseHoldUseCase releaseHold,
                     GetHoldUseCase getHold, HoldMetrics metrics) {
         this.createHold = createHold; this.confirmHold = confirmHold; this.releaseHold = releaseHold;
         this.getHold = getHold; this.metrics = metrics;

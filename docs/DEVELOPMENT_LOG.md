@@ -716,3 +716,45 @@ A running record of **what was built, in which phase, in which part of the syste
     - with Redis stopped, the same seat was still `HELD`, served from Postgres in 267 ms;
     - the counters read 1 read each from redis, warmup and database, and 1 applied update.
 - **ADR:** none (follows ADR 001: Postgres authority, Redis as cache)
+
+### P2.4 — Fast-reject filter outside the transaction
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **Application:** `application.FilteredCreateHold`, `application.SeatCodes`, `application.port.SeatFilter`, and `InventoryFacade` (now uses `FilteredCreateHold`).
+  - **Infrastructure:** `infrastructure.NoSeatFilter` and `infrastructure.cache.RedisSeatFilter`; `SeatStateCache` (pending state `P`) and `SeatCacheConfig`.
+  - **Config:** `application.yml` (`inventory.fast-path.enabled`).
+  - **Tests:** `SeatFilterIT`.
+  - **Docs:** plan, ADR 003 follow-up, registries (new #25 Null Object and #26 Fast-reject filter).
+- **What was built:**
+  - **The check:** before any database work, one Lua script checks every requested seat in `seatstate:{showId}`.
+    - **Rejected:** if any seat is booked, or held/pending and not expired, the request is rejected and Postgres is never touched.
+    - **Reserved:** otherwise all requested seats are marked `version|P|now+2s|token` in the same atomic step, and the normal hold transaction runs.
+  - **After the transaction:**
+    - **Postgres refuses:** the request's own pending marks are turned back into "available" by token.
+    - **Hold commits:** the committed `SeatsChanged` (higher version) replaces the marks with the real `HELD`.
+  - **Skipped:** a cold cache, an unknown seat code or a Redis error means `SKIPPED`, and Postgres decides alone.
+  - **Fast path off:** `FAST_PATH_ENABLED=false`, or no seat cache, uses a pass-through Null Object filter.
+  - **Metrics:** `seat_filter_verdicts_total{verdict}` and `seat_filter_errors_total`.
+- **Why this approach:**
+  - **Outside the transaction (ADR 003):** in P1.8 the in-transaction Redis call exhausted the connection pool when Redis hung. Here the filter runs before a connection is taken, and has a 250 ms timeout plus fail-open.
+  - **Pending marks:** without them, every request that arrives before the first winner's `SeatsChanged` lands would still pass the check and fight in Postgres. With the mark, the first of 1,000 identical requests reserves and the rest are rejected in Redis (test: more than 900 rejected, 1 winner, invariants hold).
+  - **The filter can only reject more:**
+    - **Stale cache:** if the cache says free but Postgres says booked, the database refuses and the marks are undone (tested).
+    - **Lost success event:** the marks time out after 2 s, so the worst outcome of a cache problem is a false 409, never an oversell.
+  - **A wrapper class, not more facade code:** the facade stays a thin delegator plus metering (SRP), and `CreateHoldUseCase` is unchanged (OCP).
+  - **`@Primary` + always-present Null Object instead of `@ConditionalOnMissingBean`:** the latter is only reliable in auto-configuration. Between ordinary configuration classes it depends on registration order.
+- **Problem found (and fixed):** the configuration class `NoSeatFilter` and its bean method `noSeatFilter()` produced the same bean name, and Spring refused to start (bean definition overriding is disabled). The bean method is now `passThroughSeatFilter()`.
+- **Alternatives considered:**
+  - **Rejecting only on `B`/`H` without pending marks:** simpler, but does little against a stampede, which is the main case.
+  - **Longer pending TTL:** fewer races, but a crashed request blocks its seats for longer. 2 s comfortably covers a hold transaction (p99 well under 1 s, P1.8).
+  - **Reserving in Redis and confirming asynchronously in Postgres (Redis as the authority):** much faster, but rejected by ADR 001.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 148 tests and 1 skipped.
+  - **`SeatFilterIT`:**
+    - a taken seat is rejected with no hold row and no transaction, and the free seat of that request is not marked;
+    - stampede: 1,000 → 1 winner, more than 900 rejected in Redis;
+    - when Postgres says no (stale cache), the pending marks are undone and the seat is holdable;
+    - a successful hold's pending mark is replaced by the committed `HELD` (version 1);
+    - cold cache → Postgres decides;
+    - Redis paused → holds still work, a taken seat is still refused by Postgres, and the filter error is counted.
+- **ADR:** follow-up of [003](adr/003-seat-locking-strategy.md)

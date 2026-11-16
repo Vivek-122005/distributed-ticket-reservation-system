@@ -38,6 +38,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7, P2.3 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy`; `CachedCatalogReadStore` wraps `JdbcCatalogReadStore` |
 | 23 | [Competing consumers (SKIP LOCKED work queue)](#23-competing-consumers-skip-locked-work-queue) | Concurrency | ✅ P2.1–P2.2 | `ExpireHoldsJob` via `JdbcHoldStore.lockExpired` |
 | 24 | [Versioned last-writer-wins](#24-versioned-last-writer-wins-order-independent-cache-updates) | Consistency | ✅ P2.3 | `SeatStateCache.APPLY` + row `version` in `SeatsChanged` |
+| 25 | [Null Object](#25-null-object) | Behavioural | ✅ P2.4 | `NoSeatFilter` (pass-through `SeatFilter`) |
+| 26 | [Fast-reject filter (cache as filter, DB as authority)](#26-fast-reject-filter-cache-as-filter-db-as-authority) | Performance | ✅ P2.4 | `FilteredCreateHold` + `RedisSeatFilter` |
 | 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5, Redis read model P2.3 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
@@ -286,3 +288,26 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Overwrite blindly:** the last *delivered* wins, not the last *written*, so stale data appears under reordering.
   - **Single-threaded ordered delivery:** a head-of-line blocking risk, and still wrong if events are lost and replayed.
   - **Delete-on-change and re-read from Postgres:** simple, but every change turns into a database read during the hottest seconds.
+
+## 25. Null Object
+- **Status:** ✅ P2.4
+- **Where:** `inventory.infrastructure.NoSeatFilter.passThroughSeatFilter()`, a `SeatFilter` that always answers `SKIPPED`. It's always defined; the Redis filter is `@Primary` when enabled.
+- **Problem:** the hold flow must work identically with the fast path off (no Redis, or `FAST_PATH_ENABLED=false`), without `if (filter != null)` checks in the use case.
+- **Why:** callers keep one code path. Turning the fast path off is a configuration change, and nothing can forget a null check.
+- **Alternative:** an `Optional<SeatFilter>` or a nullable field, which spreads conditionals. `@ConditionalOnMissingBean` between ordinary configuration classes is unreliable (it depends on registration order), so `@Primary` is used instead.
+
+## 26. Fast-reject filter (cache as filter, DB as authority)
+- **Status:** ✅ P2.4 (fail-open hardening and a breaker in P2.6)
+- **Where:**
+  - **Wrapper:** `inventory.application.FilteredCreateHold` wraps `CreateHoldUseCase` and runs outside its transaction.
+  - **Port:** `application.port.SeatFilter` (`REJECTED` / `RESERVED` / `SKIPPED`).
+  - **Redis implementation:** `infrastructure.cache.RedisSeatFilter`, with the scripts `RESERVE` (check all seats, then mark pending) and `CANCEL`.
+- **Problem:** in a flash sale almost every request loses. Sending each loser through a database transaction, which waits on the winner's row lock, is what limits throughput (P1.8 hot-seat).
+- **Why:**
+  - **Losers turned away in Redis:** a cheap atomic check in Redis rejects most of them in about a millisecond. The pending mark means only the *first* of 1,000 identical requests reaches Postgres (tested: more than 900 rejected in Redis).
+  - **One-sided error:** the filter can only reject; acceptance is always decided by the conditional update in Postgres. A stale cache can cause a false "unavailable", never an oversell.
+  - **No pool exhaustion:** it runs before a connection is taken, so a slow Redis can't exhaust the pool (ADR 003), and any doubt (cold cache, unknown seat, Redis error) means `SKIPPED`.
+- **Alternative:**
+  - **Redis Lua inside the transaction (P1.7 `RedisLuaStrategy`):** the same rejection power, but it took the whole app down when Redis hung (P1.8).
+  - **Bloom filter of sold seats:** no per-hold expiry, and it can't express "pending".
+  - **Waiting room only (P6):** limits how many users get in, but doesn't stop admitted users stampeding one seat. The two are complementary.

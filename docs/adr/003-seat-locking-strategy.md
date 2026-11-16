@@ -50,7 +50,7 @@ ADR 001 already makes PostgreSQL the authority for seat ownership. The open ques
   - Single-row hot spots still serialise on the row lock. This is mitigated by the Redis filter (P2.4) and admission control (P6), not by the lock mechanism.
   - Keeping the Redis filter in sync is extra work (P2.3–P2.5). Until then, the Lua strategy is benchmark-only.
 - **Follow-ups:**
-  - **P2.4:** move the filter out of the transaction.
+  - **P2.4:** move the filter out of the transaction. **Done:** `FilteredCreateHold` + `RedisSeatFilter`, with fail-open to Postgres; see DESIGN_PATTERNS #26.
   - **P2.6:** feature-flagged bypass on Redis failure.
   - **P9:** repeat the comparison at admitted load behind the waiting room.
   - **P7.3:** measure partitioning.

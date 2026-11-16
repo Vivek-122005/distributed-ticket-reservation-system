@@ -44,7 +44,7 @@ public class CreateHoldUseCase {
     @Transactional
     public HoldResult execute(HoldCommand command) {
         List<String> requested = command.seatCodes();
-        List<String> normalized = requested.stream().map(String::trim).map(String::toUpperCase).distinct().sorted(Comparator.naturalOrder()).toList();
+        List<String> normalized = SeatCodes.normalize(requested);
         if (normalized.size() != requested.size()) throw new IllegalArgumentException("Seat codes must be unique");
 
         // BR-03. A sale closing concurrently with this check is harmless: the seat claims below still

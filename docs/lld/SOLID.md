@@ -67,6 +67,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 |---|---|---|
 | Use cases → outbound ports | `CreateHoldUseCase` depends on `application.port.{ShowStore, HoldStore, SeatLockingStrategy}`; package-private JDBC adapters in `infrastructure` implement them. ArchUnit `applicationDependsOnPortsNotAdapters` | ✅ P1.3 (more strategies P1.7) |
 | `ExpireHoldsJob` → `InventoryEventPublisher` | The job publishes domain events through a port; today Spring events, later the outbox (P5.2), with no change to the job | ✅ P2.1 |
+| `FilteredCreateHold` → `SeatFilter` | The fast path is a port with two implementations (Redis, pass-through Null Object); `CreateHoldUseCase` didn't change at all (OCP) | ✅ P2.4 |
 | Facade → `HoldMetrics` | Business metrics go through an application port; Micrometer lives only in `infrastructure.MicrometerHoldMetrics` | ✅ P1.9 |
 | `InventoryController` → `InventoryApi` | The HTTP adapter depends on the module interface, not on the use-case class | ✅ P0.14 |
 | Booking → `InventoryApi` | Booking depends on the interface; Spring wires the in-process or HTTP adapter | ⬜ P3.3 |

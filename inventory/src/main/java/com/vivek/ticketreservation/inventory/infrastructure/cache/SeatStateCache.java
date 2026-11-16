@@ -16,7 +16,7 @@ import java.util.UUID;
  * Redis copy of seat states per show (P2.3). Postgres stays the authority (ADR 001); this is a cache.
  *
  * <p>Layout: hash {@code seatstate:{showId}} with field = seat code, value = {@code version|S|expiryMillis}
- * ({@code S} = A available, H held, B booked); key {@code seatstate:{showId}:ready} once fully loaded.
+ * ({@code S} = A available, H held, B booked, P pending: see {@code RedisSeatFilter}); key {@code seatstate:{showId}:ready} once fully loaded.
  * The braces are a Redis Cluster hash tag, so both keys of a show live in one slot and one script can
  * touch them (P7.2).
  *
@@ -100,7 +100,8 @@ class SeatStateCache {
 
     static CachedSeat decode(String seatCode, String value) {
         String[] parts = value.split("\\|");
-        SeatStatus status = switch (parts[1]) { case "H" -> SeatStatus.HELD; case "B" -> SeatStatus.BOOKED; default -> SeatStatus.AVAILABLE; };
+        // "P" (pending, set by the fast-reject filter, P2.4) reads as HELD until its short expiry passes.
+        SeatStatus status = switch (parts[1]) { case "H", "P" -> SeatStatus.HELD; case "B" -> SeatStatus.BOOKED; default -> SeatStatus.AVAILABLE; };
         long expiry = Long.parseLong(parts[2]);
         return new CachedSeat(seatCode, status, expiry == 0 ? null : Instant.ofEpochMilli(expiry), Long.parseLong(parts[0]));
     }

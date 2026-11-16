@@ -1,6 +1,7 @@
 package com.vivek.ticketreservation.inventory.infrastructure.cache;
 
 import com.vivek.ticketreservation.inventory.application.port.CatalogReadStore;
+import com.vivek.ticketreservation.inventory.application.port.SeatFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,14 @@ class SeatCacheConfig {
     SeatCacheUpdater seatCacheUpdater(SeatStateCache cache, MeterRegistry registry,
                                       @Value("${inventory.seat-cache.update-queue:10000}") int queueCapacity) {
         return new SeatCacheUpdater(cache, registry, queueCapacity);
+    }
+
+    /** Fast-reject filter in front of hold creation (P2.4); off with {@code inventory.fast-path.enabled=false}. */
+    @Bean
+    @Primary
+    @ConditionalOnProperty(name = "inventory.fast-path.enabled", havingValue = "true", matchIfMissing = true)
+    SeatFilter redisSeatFilter(StringRedisTemplate redis, MeterRegistry registry) {
+        return new RedisSeatFilter(redis, registry);
     }
 
     /** The decorated store becomes the one the read side uses; the JDBC store stays inside as fallback. */

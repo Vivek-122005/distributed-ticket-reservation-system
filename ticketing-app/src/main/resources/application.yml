@@ -28,6 +28,9 @@ inventory:
     # P2.3: seat maps from Redis, kept current from SeatsChanged events; falls back to Postgres.
     enabled: ${SEAT_CACHE_ENABLED:true}
     update-queue: 10000
+  fast-path:
+    # P2.4: reject requests for seats the cache knows are taken before any database work (needs seat-cache).
+    enabled: ${FAST_PATH_ENABLED:true}
   locking:
     # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
     strategy: ${LOCKING_STRATEGY:conditional-update}
