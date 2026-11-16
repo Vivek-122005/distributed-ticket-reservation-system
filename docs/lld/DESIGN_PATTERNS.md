@@ -7,6 +7,8 @@ The record of **every design pattern used in this codebase**: where it lives (cl
 - The class that applies the pattern carries a one-line Javadoc pointer, for example `/** Pattern: Strategy, see docs/lld/DESIGN_PATTERNS.md#strategy */`.
 - An entry stays ⬜ *planned* until the code exists. It then becomes ✅ with real file paths. Nothing is listed as implemented before it is.
 
+Class-level view of where these patterns sit: [class-diagrams.md](class-diagrams.md).
+
 Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in brackets)
 
 ## Summary

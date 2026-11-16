@@ -165,3 +165,21 @@ A running record of **what was built, in which phase, in which part of the syste
 - **How it was verified:** all diagrams parse with Mermaid 11.4.1. Each FR maps to an existing plan part, and each use case links back to its FRs.
 - **ADR:** none
 
+### P0.13 — Class diagrams
+- **Date:** 2026-11-16
+- **Module / files:** `docs/lld/class-diagrams.md`, a pointer in `docs/lld/DESIGN_PATTERNS.md`
+- **What was built:**
+  - **Class diagrams:** the target design of the inventory domain and its application ports; booking (aggregate, saga, idempotency, ports); payment (aggregate, `PaymentGateway` with mock and sandbox adapters, webhook handler, reconciliation job); and `common` (event envelope, factory, outbox, consumer base).
+  - **Mapping tables:** each class is listed with its pattern or principle and its plan part.
+  - **Module rules:** a dependency diagram and four rules that ArchUnit will enforce in P0.14.
+- **Why this approach:**
+  - **Diagrams before code:** P0.14 and Phase 1 then implement a reviewed design instead of discovering it.
+  - **Key boundaries made explicit:** booking sees only `InventoryApi`/`PaymentApi`, and inventory/payment never depend on booking, so the graph stays acyclic and extraction (ADR 002) needs no untangling.
+  - **Hot claim path vs aggregate methods:** set-based SQL is used for speed on the hot path, while aggregate methods are used for confirm, expire and unit tests. This is documented so the duplication is a decision, not an accident.
+- **Alternatives considered:**
+  - **Generating diagrams from code (e.g. IntelliJ, PlantUML plugins):** accurate after the fact, but they show no intent and can't guide the build. Generated diagrams can be compared against these in P12.2.
+  - **One huge diagram for the whole system:** unreadable. Split per module with a separate dependency view.
+  - **Full GoF State classes per status:** the enum-with-transitions form is used instead (reasoning in DESIGN_PATTERNS §6).
+- **How it was verified:** all 29 Mermaid diagrams in `docs/` parse with Mermaid 11.4.1. The class names match the API contracts (P0.11) and the pattern registry (P0.10).
+- **ADR:** none
+
