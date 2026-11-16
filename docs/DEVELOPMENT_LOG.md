@@ -277,3 +277,34 @@ A running record of **what was built, in which phase, in which part of the syste
   - **`SERIALIZABLE` isolation:** also correct, but adds serialization-failure retries for no gain over a single compare-and-set statement.
 - **How it was verified:** `mvn verify`: BUILD SUCCESS, 10 surefire + 13 failsafe tests. New ITs: a priced response (2 × 150000 = 300000 INR); a per-seat frozen price is used (99900 + 150000); an 8-seat hold claims exactly 8 rows with one hold id. The existing conflict test still proves nothing is left held after a partial overlap. The deadlock-freedom claim is tested under real contention in P1.6.
 - **ADR:** none (the strategy comparison is ADR 003 in P1.8)
+
+### P1.2 — Lazy expiry in the claim query, database clock for expiry
+- **Date:** 2026-11-16
+- **Module / files:** `JdbcSeatClaimRepository` (claim condition), new `JdbcHoldRepository`, `CreateHoldUseCase`, new `LazyExpiryIT`, `ApplicationStartupIT`; plan, pattern registry
+- **What was built:**
+  - **Lazy expiry:** the claim now treats a seat as claimable if it is `AVAILABLE` **or** `HELD` with `hold_expires_at < now()`. An expired hold never blocks a seat, even if the expiry worker (P2.1) has not run.
+  - **Database-clock expiry:** hold rows are inserted with `expires_at = now() + 5 min`, computed by Postgres and returned with `RETURNING`. That value is written to the seats in the same transaction.
+- **Why this approach:**
+  - **Correctness without the worker:** invariant 4 says every hold expires. If availability depended on a scheduled job, a slow or crashed worker would make seats unsellable during the hottest minutes. With lazy expiry the worker only *cleans up* (marks old holds `EXPIRED`, emits events), and is never on the critical path.
+  - **One clock:** SRS assumption A3 says app replicas may skew. If the app computed `expiresAt` and the database compared it with `now()`, a replica 30 s fast would give 4.5-minute holds. `now()` is the transaction start time, so the hold, its seats and the comparison all use one instant.
+  - **The stale hold row is safe:**
+    - It stays `HELD` until the worker runs, but its seats can be re-held.
+    - Confirm (P1.4) must also require `expires_at > now()`, so the old hold can't be confirmed later.
+    - The worker must release seats only `WHERE hold_id = <expired hold>`, so it can't free a seat that someone has re-held.
+    
+    Both rules are written into the claim class Javadoc so P1.4 and P2.1 implement them.
+  - **`BOOKED` is never reclaimed:** the expiry branch requires `status = 'HELD'`, so a stale `hold_expires_at` on a booked seat is harmless (tested).
+- **Alternatives considered:**
+  - **Expiry worker only:** simpler SQL, but availability then depends on job timing. This is the exact failure lazy expiry removes.
+  - **Clearing expiry in the same statement:** marking old holds `EXPIRED` inside the claim would make the hot statement touch a second table and lock hold rows of other users. Left to the worker.
+  - **Postgres `pg_cron` or a TTL mechanism:** Postgres has no row TTL; `pg_cron` is an extra extension, and still a timer.
+  - **App clock with NTP:** usually fine, but NTP drift and pauses during a VM migration happen, and one authoritative clock is free here.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 10 surefire + 17 failsafe tests.
+  - **`LazyExpiryIT`:**
+    - a seat of an expired hold is re-held with no worker running, and an unrequested seat keeps its stale hold;
+    - a live hold still blocks;
+    - a `BOOKED` seat with an old expiry is never reclaimed;
+    - `expiresAt` = DB `now()` + 5 min, and the seat's `hold_expires_at` equals the hold's.
+  - **Test isolation fix:** `ApplicationStartupIT` counted only `AVAILABLE` seats, which depended on test order. It now counts all show seats.
+- **ADR:** none

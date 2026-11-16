@@ -28,7 +28,7 @@ class ApplicationStartupIT {
     @Test
     void v2CreatesTheShowBasedDemoCatalog() {
         Integer showSeats = jdbc.queryForObject(
-                "SELECT count(*) FROM inventory.show_seats WHERE show_id = ? AND status = 'AVAILABLE'", Integer.class, DEMO_SHOW);
+                "SELECT count(*) FROM inventory.show_seats WHERE show_id = ?", Integer.class, DEMO_SHOW);
         assertThat(showSeats).isEqualTo(100);
         Integer venueSeats = jdbc.queryForObject("SELECT count(*) FROM inventory.seats", Integer.class);
         assertThat(venueSeats).as("one show seat per physical seat").isEqualTo(showSeats);

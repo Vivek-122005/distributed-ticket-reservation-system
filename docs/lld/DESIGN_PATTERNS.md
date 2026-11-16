@@ -53,15 +53,16 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** a hand-written DAO with `JdbcTemplate`. That gives more control but more boilerplate. It is still available for the hot claim query if JPA overhead shows up in P9.5.
 
 ## 3. Compare-and-Set (conditional update)
-- **Status:** ✅ batched in P1.1 (lazy expiry in P1.2)
+- **Status:** ✅ batched in P1.1, lazy expiry in P1.2
 - **Where:** `inventory.infrastructure.JdbcSeatClaimRepository.claimAvailable`, called by `inventory.application.CreateHoldUseCase.execute`:
-  `WITH target AS (SELECT id … WHERE show_id=? AND seat_code = ANY(?) AND status='AVAILABLE' ORDER BY seat_code FOR UPDATE) UPDATE … FROM target … RETURNING seat_code, price_minor`.
+  `WITH target AS (SELECT id … WHERE show_id=? AND seat_code = ANY(?) AND (status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now())) ORDER BY seat_code FOR UPDATE) UPDATE … FROM target … RETURNING seat_code, price_minor`.
 - **Problem:** thousands of concurrent requests for the same seat; exactly one may win, and a multi-seat request must get all of its seats or none.
 - **Why:**
   - **Atomic check-and-set:** under READ COMMITTED, Postgres re-checks the `WHERE` on the newest row version after waiting for a lock, so a seat claimed meanwhile is simply not returned.
   - **All-or-nothing:** the use case compares the number of claimed rows with the number requested and throws on a mismatch. The transaction rollback undoes the partial claim and the hold row.
   - **No deadlocks:** `ORDER BY … FOR UPDATE` locks rows in one global order, so two overlapping requests can't each wait for the other.
   - **One round trip:** the claim and the prices come back in one statement instead of N.
+  - **Lazy expiry (P1.2):** an expired hold counts as free inside the same compare-and-set, so a late expiry worker can delay cleanup but never availability.
 - **Alternative:**
   - **One `UPDATE` per seat (the P0 version):** correct, but N round trips, with lock order depending on Java sorting.
   - **A bare `UPDATE … WHERE seat_code = ANY(?)` without the ordered CTE:** lock order then follows the plan's scan order, which isn't guaranteed.

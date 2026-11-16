@@ -6,8 +6,7 @@ import com.vivek.ticketreservation.inventory.api.HoldResult;
 import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
 import com.vivek.ticketreservation.inventory.api.ShowNotOnSaleException;
-import com.vivek.ticketreservation.inventory.domain.Hold;
-import com.vivek.ticketreservation.inventory.infrastructure.HoldRepository;
+import com.vivek.ticketreservation.inventory.infrastructure.JdbcHoldRepository;
 import com.vivek.ticketreservation.inventory.infrastructure.ShowRepository;
 import com.vivek.ticketreservation.inventory.infrastructure.ShowRow;
 import com.vivek.ticketreservation.inventory.infrastructure.JdbcSeatClaimRepository;
@@ -26,7 +25,8 @@ import java.util.UUID;
  * <p>Pattern: Compare-and-Set, see docs/lld/DESIGN_PATTERNS.md#3-compare-and-set-conditional-update.
  * One round trip claims every seat that is still AVAILABLE, locking rows in seat-code order; if fewer
  * rows come back than were requested, the exception rolls back the whole transaction, including the
- * hold row and the seats that were claimed.
+ * hold row and the seats that were claimed. Seats whose hold has expired are claimable at once (lazy
+ * expiry, P1.2); expiry is computed by the database clock (SRS A3).
  * Known deviation: depends on Spring Data repositories directly instead of a port (SOLID.md #2, P1.3).
  */
 @Service
@@ -34,9 +34,9 @@ public class CreateHoldUseCase {
     private static final Duration HOLD_DURATION = Duration.ofMinutes(5);
     private final ShowRepository shows;
     private final JdbcSeatClaimRepository seats;
-    private final HoldRepository holds;
+    private final JdbcHoldRepository holds;
 
-    public CreateHoldUseCase(ShowRepository shows, JdbcSeatClaimRepository seats, HoldRepository holds) {
+    public CreateHoldUseCase(ShowRepository shows, JdbcSeatClaimRepository seats, JdbcHoldRepository holds) {
         this.shows = shows; this.seats = seats; this.holds = holds;
     }
 
@@ -52,8 +52,7 @@ public class CreateHoldUseCase {
         if (!show.isOnSale()) throw new ShowNotOnSaleException(command.showId());
 
         UUID holdId = UUID.randomUUID();
-        Instant expiresAt = Instant.now().plus(HOLD_DURATION);
-        holds.saveAndFlush(new Hold(holdId, command.showId(), command.userId(), expiresAt));
+        Instant expiresAt = holds.insertHeld(holdId, command.showId(), command.userId(), HOLD_DURATION);
         List<ClaimedSeat> claimed = seats.claimAvailable(command.showId(), normalized, holdId, command.userId(), expiresAt);
         if (claimed.size() != normalized.size()) throw new SeatUnavailableException();
 

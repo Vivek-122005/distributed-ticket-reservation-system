@@ -13,11 +13,18 @@ import java.util.UUID;
  * Hot-path seat claim on {@code inventory.show_seats}: one statement for all requested seats.
  *
  * <p>Pattern: Compare-and-Set, batched form (docs/lld/DESIGN_PATTERNS.md#3). The CTE locks the
- * still-AVAILABLE rows in {@code seat_code} order ({@code ORDER BY … FOR UPDATE}), so two
+ * claimable rows in {@code seat_code} order ({@code ORDER BY … FOR UPDATE}), so two
  * overlapping multi-seat requests always acquire row locks in the same order and cannot deadlock.
  * Under READ COMMITTED, a row that another transaction claimed while we waited is re-checked and
  * dropped, so it simply is not returned. The caller compares the number of claimed rows with the
  * number requested and rolls back on a mismatch (all-or-nothing).
+ *
+ * <p>Lazy expiry (P1.2): a seat whose hold has passed {@code hold_expires_at} is claimable at once,
+ * judged by the database clock ({@code now()}), so correctness never depends on the expiry worker
+ * (P2.1) being on time. The previous hold row keeps its status until that worker marks it EXPIRED;
+ * it can no longer be confirmed because confirmation also requires {@code expires_at > now()} (P1.4),
+ * and the worker releases seats only {@code WHERE hold_id = <expired hold>}, so it never touches a
+ * seat that has been re-held.
  *
  * <p>Plain JDBC instead of Spring Data: {@code UPDATE … RETURNING} gives the claimed seats and
  * their prices in the same round trip, which a {@code @Modifying} query cannot return.
@@ -31,7 +38,8 @@ public class JdbcSeatClaimRepository {
     private static final String CLAIM = """
             WITH target AS (
                 SELECT id FROM inventory.show_seats
-                 WHERE show_id = :showId AND seat_code = ANY(:seatCodes) AND status = 'AVAILABLE'
+                 WHERE show_id = :showId AND seat_code = ANY(:seatCodes)
+                   AND (status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < now()))
                  ORDER BY seat_code
                    FOR UPDATE)
             UPDATE inventory.show_seats s
@@ -46,7 +54,7 @@ public class JdbcSeatClaimRepository {
 
     public JdbcSeatClaimRepository(NamedParameterJdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    /** Claims every listed seat that is still AVAILABLE; returns only the seats actually claimed. */
+    /** Claims every listed seat that is AVAILABLE or whose hold has expired; returns only the seats actually claimed. */
     public List<ClaimedSeat> claimAvailable(UUID showId, List<String> seatCodes, UUID holdId, UUID userId, Instant expiresAt) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("showId", showId)
