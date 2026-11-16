@@ -2,7 +2,7 @@
 
 One PostgreSQL instance, **one schema per service** (`inventory`, `booking`, `payment`, `notification`, …). Each service connects with its own DB user that can only access its own schema. This gives database-per-service ownership without running many Postgres containers on a laptop; splitting into separate instances later is a configuration change.
 
-> Current state: implemented by migration `V2__show_based_schema.sql` (P1.0) in the `inventory` schema, which also drops the V1 `public.events / holds / seat_inventory` demo tables. Flyway's history table stays in `public` until booking gets its own migrations (P3.1). The `CHECK` constraints marked *(P1.3)* are not in V2 yet. The planned `idx_show_seats_lookup` was not created: the `UNIQUE (show_id, seat_code)` index already serves both the claim and seat-map lookups, and a second index would only slow writes on the hottest table.
+> Current state: implemented by migration `V2__show_based_schema.sql` (P1.0) in the `inventory` schema, which also drops the V1 `public.events / holds / seat_inventory` demo tables. Flyway's history table stays in `public` until booking gets its own migrations (P3.1). The state `CHECK` constraints were added by `V3__show_seat_state_checks.sql` (P1.3). The planned `idx_show_seats_lookup` was not created: the `UNIQUE (show_id, seat_code)` index already serves both the claim and seat-map lookups, and a second index would only slow writes on the hottest table.
 
 ## 4.1 Inventory schema (inventory module) *(rev: Venue / Show model)*
 
@@ -90,8 +90,9 @@ erDiagram
 | `UNIQUE (show_id, seat_id)` on show_seats | A seat exists once per show. The row is the unit of locking (invariant 1) |
 | `UNIQUE (show_id, seat_code)` on show_seats | Claim query by code needs exactly one row per code |
 | `UNIQUE (section_id, seat_code)` on seats | Layout has no duplicate chairs |
-| `CHECK (status <> 'AVAILABLE' OR hold_id IS NULL)` *(P1.3)* | No "available but held" ghost state |
-| `CHECK (status <> 'HELD' OR hold_expires_at IS NOT NULL)` *(P1.3)* | Invariant 4: every hold can expire |
+| `ck_available_has_no_hold`: `CHECK (status <> 'AVAILABLE' OR (hold_id, held_by_user_id, hold_expires_at all NULL))` *(V3, P1.3)* | No "available but held" ghost state |
+| `ck_held_has_hold_and_expiry`: `CHECK (status <> 'HELD' OR (hold_id, held_by_user_id, hold_expires_at all NOT NULL))` *(V3, P1.3)* | Invariant 4: every hold can expire |
+| `ck_booked_has_hold`: `CHECK (status <> 'BOOKED' OR hold_id IS NOT NULL)` *(V3, P1.3)* | A booked seat traces back to its hold |
 | `idx_show_seats_lookup (show_id, status, seat_code)` | Seat-map reads and claim lookups |
 | `idx_holds_expiry (status, expires_at)` | Expiry worker scan |
 | `idx_outbox_unpublished (created_at) WHERE published_at IS NULL` *(P5.3)* | Partial index: relay scans only pending rows, stays small |

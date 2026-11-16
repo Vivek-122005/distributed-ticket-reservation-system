@@ -11,17 +11,17 @@ import org.springframework.web.bind.annotation.*;
 public class ApiExceptionHandler {
     @ExceptionHandler(SeatUnavailableException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    ApiError unavailable() { return new ApiError("SEAT_UNAVAILABLE", "One or more requested seats are no longer available.", false); }
+    ApiError unavailable() { return ApiError.of("SEAT_UNAVAILABLE", "One or more requested seats are no longer available.", false); }
 
     @ExceptionHandler(ShowNotOnSaleException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    ApiError notOnSale(ShowNotOnSaleException error) { return new ApiError("SHOW_NOT_ON_SALE", error.getMessage(), false); }
+    ApiError notOnSale(ShowNotOnSaleException error) { return ApiError.of("SHOW_NOT_ON_SALE", error.getMessage(), false); }
 
     @ExceptionHandler(ShowNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    ApiError showNotFound(ShowNotFoundException error) { return new ApiError("SHOW_NOT_FOUND", error.getMessage(), false); }
+    ApiError showNotFound(ShowNotFoundException error) { return ApiError.of("SHOW_NOT_FOUND", error.getMessage(), false); }
 
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    ApiError invalid(IllegalArgumentException error) { return new ApiError("INVALID_REQUEST", error.getMessage(), false); }
+    ApiError invalid(IllegalArgumentException error) { return ApiError.of("INVALID_REQUEST", error.getMessage(), false); }
 }

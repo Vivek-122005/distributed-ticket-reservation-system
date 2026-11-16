@@ -308,3 +308,52 @@ A running record of **what was built, in which phase, in which part of the syste
     - `expiresAt` = DB `now()` + 5 min, and the seat's `hold_expires_at` equals the hold's.
   - **Test isolation fix:** `ApplicationStartupIT` counted only `AVAILABLE` seats, which depended on test order. It now counts all show seats.
 - **ADR:** none
+
+### P1.3 — Domain state machines, outbound ports, database state checks
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **`inventory.domain`:** `SeatStatus`, `HoldStatus`, `ShowStatus`, `Hold`, `ShowSeat`, `Show`, `IllegalStateTransitionException`, `HoldExpiredException`.
+  - **`inventory.application.port`:** `SeatLockingStrategy`, `HoldStore`, `ShowStore`.
+  - **`inventory.infrastructure`:** `ConditionalUpdateStrategy`, `JdbcHoldStore`, `JdbcShowStore`, replacing the JPA repositories and entities.
+  - **Other code:** `CreateHoldUseCase`, `web.ApiError`, `V3__show_seat_state_checks.sql`, `inventory/pom.xml` (JPA → JDBC), `application.yml`.
+  - **Tests:** domain unit tests; `ModuleBoundaryTest` (2 rules changed or added); `SeatStateConstraintsIT`.
+  - **Docs:** pattern and SOLID registries, class diagram, HLD §4.1, plan.
+- **What was built:**
+  - **State machines:**
+    - **Transition tables:** each status enum declares its allowed next states (`canTransitionTo`).
+    - **Aggregates:** `Hold.confirm(now) / release() / expire(now)`, `ShowSeat.hold / book / release` and `Show.openSale / closeSale` enforce the tables plus the business conditions (expiry, ownership by hold id, idempotent repeats). They throw on illegal moves.
+    - **Tests:** 45 unit tests, with no Spring or database. `StatusTransitionsTest` lists every transition pair explicitly.
+  - **Ports and adapters:**
+    - **Use case:** `CreateHoldUseCase` now depends only on `ShowStore`, `HoldStore` and `SeatLockingStrategy`.
+    - **Adapters:** package-private JDBC classes implement those ports. The old claim class is now `ConditionalUpdateStrategy`, the first `SeatLockingStrategy` (the other four arrive in P1.7).
+  - **Database backstop:** V3 adds three `CHECK` constraints:
+    - an `AVAILABLE` seat carries no hold;
+    - a `HELD` seat has a hold, a user and an expiry;
+    - a `BOOKED` seat keeps its hold id.
+  - **Error format:** `ApiError` gains `timestamp`, giving the agreed `{code, message, retryable, timestamp}`.
+  - **ArchUnit:**
+    - `domainIsFrameworkFree` now also bans `jakarta.persistence`, `java.sql` and `javax.sql`.
+    - New rule `applicationDependsOnPortsNotAdapters`.
+- **Why this approach:**
+  - **Closes SOLID deviations #2 and #3:** the use case can be unit-tested with fake ports, and a locking strategy can be swapped without touching business code. That's exactly what the P1.7 benchmark needs.
+  - **JDBC instead of a JPA entity next to each domain class:**
+    - **Explicit SQL everywhere:** every inventory query needs it anyway: `ORDER BY … FOR UPDATE`, `RETURNING`, `now() + interval`.
+    - **Little lost:** JPA only added a mirror class per table and schema validation, and Flyway plus the ITs already cover the schema.
+    - **Same layer budget:** removing JPA keeps the number of mapping layers the same, instead of adding entity ↔ domain mappers.
+  - **Same expiry rule in Java and SQL (`expiresAt < now`):** at the exact expiry instant a hold is still live. "Claimable by someone else" and "confirmable" therefore never overlap and never leave a gap.
+  - **Ownership by hold id in `ShowSeat.book/release`:** this is the rule that keeps lazy expiry (P1.2) safe. A late actor holding an old hold id can't move a seat that has been re-held. It's stated in code now so P1.4 and P2.1 follow it.
+  - **`CHECK` constraints in addition to code:** the hot path writes seats with set-based SQL, not through the aggregate. The database is the last line of defence for any future strategy, manual fix or bug.
+  - **`SOLD_OUT → ON_SALE` allowed, `CLOSED` terminal:** seats return to stock on release or expiry. UC-09 9a forbids reopening a closed show.
+- **Alternatives considered:**
+  - **Keep JPA and add a separate `HoldEntity` plus mapper:** this was the plan's first idea. It doubles the classes per table, and still needs native SQL for every interesting query.
+  - **GoF State with one class per state:** see DESIGN_PATTERNS §6. Too heavy for state machines of 3–4 states.
+  - **Rules only in the database (triggers):** they would hold, but the rules couldn't be read or unit-tested in Java, and error messages would be opaque.
+  - **Rules only in Java:** leaves set-based SQL paths unguarded.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS. Surefire: 45 domain unit tests in `inventory` and 11 architecture tests. Failsafe: 20 ITs.
+  - **`SeatStateConstraintsIT`:** each of the three constraints rejects a hand-written impossible row.
+  - **`ApplicationStartupIT`:** V1–V3 applied.
+  - **Error format:** the 409 body now has `retryable` and `timestamp`.
+  - **ArchUnit rules bite:** the planted booking violation still fails.
+  - **Test isolation:** the test-data reset now also restores prices, so one failing test can't leak a modified price into others (seen once while fixing a SQL typo).
+- **ADR:** none

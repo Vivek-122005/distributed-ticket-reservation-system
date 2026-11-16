@@ -155,9 +155,13 @@ classDiagram
     class RedisLuaStrategy
     class HoldStore {
       <<interface>>
-      +save(Hold)
+      +createHeld(id, showId, userId, ttl) Hold
       +find(holdId) Optional~Hold~
-      +findExpired(now, limit) List~Hold~
+      +findExpired(limit) List~Hold~
+    }
+    class ShowStore {
+      <<interface>>
+      +find(showId) Optional~Show~
     }
     InventoryApi <|.. InventoryFacade
     InventoryFacade --> CreateHoldUseCase
@@ -170,7 +174,9 @@ classDiagram
     SeatLockingStrategy <|.. OptimisticLockStrategy
     SeatLockingStrategy <|.. RedisLockStrategy
     SeatLockingStrategy <|.. RedisLuaStrategy
-    HoldStore <|.. JpaHoldStore
+    HoldStore <|.. JdbcHoldStore
+    ShowStore <|.. JdbcShowStore
+    CreateHoldUseCase --> ShowStore
     ExpireHoldsJob --> HoldStore
 ```
 
@@ -179,7 +185,7 @@ classDiagram
 | `InventoryApi`, `CatalogAdminApi`, `SeatMapQuery` | Facade + ISP: booking sees only hold operations; admin and read paths are separate interfaces | P0.14, P1.5, P6.9 |
 | `InventoryFacade` | Facade: the module's single entry point, delegating to one use case per operation (SRP) | P0.14 |
 | `SeatLockingStrategy` + 5 implementations | Strategy + OCP; one contract test suite for all (LSP) | P1.7 |
-| `HoldStore` ← `JpaHoldStore` | Repository behind a port (DIP) | P1.3 |
+| `HoldStore` ← `JdbcHoldStore`, `ShowStore` ← `JdbcShowStore` | Repository behind a port (DIP); JDBC because every query needs explicit SQL and the DB clock (`createHeld` computes expiry in Postgres, SRS A3) | P1.3 ✅ |
 
 ---
 

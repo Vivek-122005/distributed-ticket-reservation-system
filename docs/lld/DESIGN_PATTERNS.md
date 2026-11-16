@@ -15,13 +15,13 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 
 | # | Pattern | Category | Status | Where (main class) |
 |---|---|---|---|---|
-| 1 | [Ports & Adapters (Hexagonal)](#1-ports--adapters-hexagonal) | Architectural | 🔨 | all modules |
-| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldRepository`, `ShowRepository`, `JdbcSeatClaimRepository` |
-| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `JdbcSeatClaimRepository.claimAvailable` |
+| 1 | [Ports & Adapters (Hexagonal)](#1-ports--adapters-hexagonal) | Architectural | ✅ inventory (P1.3) | `application.port.*` ← `infrastructure.*` |
+| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldStore` ← `JdbcHoldStore`, `ShowStore` ← `JdbcShowStore` |
+| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `ConditionalUpdateStrategy.claim` |
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
-| 6 | [State](#6-state) | Behavioural (GoF) | ⬜ P1.3, P3.2, P4.2 | `ShowSeat`, `Hold`, `Booking`, `Payment` |
-| 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ⬜ P1.7 | `SeatLockingStrategy` |
+| 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3); ⬜ P3.2, P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
+| 7 | [Strategy](#7-strategy) | Behavioural (GoF) | 🔨 port + default (P1.3); others ⬜ P1.7 | `SeatLockingStrategy` ← `ConditionalUpdateStrategy` |
 | 8 | [Adapter](#8-adapter) | Structural (GoF) | ⬜ P4.1, P3.3 | `PaymentGateway`, `InventoryApi` adapters |
 | 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
@@ -39,22 +39,30 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 ---
 
 ## 1. Ports & Adapters (Hexagonal)
-- **Status:** 🔨 the inbound side is done: `web` (HTTP adapter) → `api.InventoryApi` (port) → `application`. Outbound ports (repositories behind interfaces) are still missing; see [SOLID.md, known deviations](SOLID.md#known-deviations-to-fix) #2.
-- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/{api,web,application,domain,infrastructure}`. `api` = published module port + DTOs; `web` = inbound HTTP adapter. Layer rules are enforced by `ticketing-app/src/test/java/com/vivek/ticketreservation/architecture/ModuleBoundaryTest.java`.
-- **Problem:** business rules (who may hold a seat) must not depend on HTTP, JPA or Redis, because the locking implementation has to be swappable for the benchmark (P1.7) and modules must be extractable later (ADR 002).
-- **Why:** the domain and use cases sit in the centre. `api` is the inbound adapter. `infrastructure` holds outbound adapters behind port interfaces.
+- **Status:** ✅ in the inventory module (inbound P0.14, outbound P1.3). Booking and payment follow the same layout in P3/P4.
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/`:
+  - **inbound:** `web.InventoryController` (HTTP adapter) → `api.InventoryApi` (published port) → `application.*UseCase`.
+  - **outbound:** `application.port.{SeatLockingStrategy, HoldStore, ShowStore}` (ports owned by the application layer) ← `infrastructure.{ConditionalUpdateStrategy, JdbcHoldStore, JdbcShowStore}` (package-private JDBC adapters).
+  - **enforced by** `ticketing-app/.../architecture/ModuleBoundaryTest.java`: `applicationDependsOnPortsNotAdapters`, `applicationDoesNotDependOnWeb`, `domainIsFrameworkFree`, `domainDoesNotDependOnOuterLayers`.
+- **Problem:** business rules (who may hold a seat) must not depend on HTTP, SQL or Redis, because the locking implementation has to be swappable for the benchmark (P1.7) and modules must be extractable later (ADR 002).
+- **Why:** the domain and use cases sit in the centre. The application layer *owns* the port interfaces it needs, and adapters implement them, so dependencies point inwards. The adapters are package-private, so nothing outside `infrastructure` can even name them; Spring wires them by interface.
 - **Alternative:** classic layered architecture (controller → service → DAO). It is simpler, but the service layer then depends on persistence details, and swapping a locking strategy touches business code.
 
 ## 2. Repository
-- **Status:** ✅
-- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/infrastructure/HoldRepository.java`, `ShowSeatRepository.java`, `ShowRepository.java` (Spring Data JPA).
-- **Problem:** use cases need to load and save aggregates without writing SQL plumbing.
-- **Why:** a collection-like interface per aggregate. Spring Data generates the common methods; hot paths use explicit native queries.
-- **Alternative:** a hand-written DAO with `JdbcTemplate`. That gives more control but more boilerplate. It is still available for the hot claim query if JPA overhead shows up in P9.5.
+- **Status:** ✅ behind ports since P1.3
+- **Where:** ports `inventory.application.port.HoldStore` (`createHeld`, `find`) and `ShowStore` (`find`). Adapters `inventory.infrastructure.JdbcHoldStore` and `JdbcShowStore` (plain JDBC, `NamedParameterJdbcTemplate`) map rows to the framework-free aggregates `domain.Hold` and `domain.Show`.
+- **Problem:** use cases need to load and save aggregates without knowing SQL, and the domain must not carry persistence annotations (SOLID.md deviation #3).
+- **Why:**
+  - **Collection-like interface:** one per aggregate, owned by the application layer.
+  - **JDBC instead of JPA:** every inventory query needs explicit SQL anyway: `ORDER BY … FOR UPDATE`, `RETURNING`, database-clock expressions (`now() + interval`). JPA added only an entity mirror of each table plus schema validation.
+  - **`createHeld(…)` instead of `save(new Hold(…))`:** the database computes `expires_at` from its own clock (SRS A3).
+- **Alternative:**
+  - **Spring Data JPA (used until P1.2):** less mapping code, but the entity sat in the domain or had to be duplicated. Its `@Modifying` queries can't return rows.
+  - **jOOQ:** type-safe SQL, but one more code generator for about six queries.
 
 ## 3. Compare-and-Set (conditional update)
 - **Status:** ✅ batched in P1.1, lazy expiry in P1.2
-- **Where:** `inventory.infrastructure.JdbcSeatClaimRepository.claimAvailable`, called by `inventory.application.CreateHoldUseCase.execute`:
+- **Where:** `inventory.infrastructure.ConditionalUpdateStrategy.claim` (implements the `SeatLockingStrategy` port), called by `inventory.application.CreateHoldUseCase.execute`:
   `WITH target AS (SELECT id … WHERE show_id=? AND seat_code = ANY(?) AND (status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now())) ORDER BY seat_code FOR UPDATE) UPDATE … FROM target … RETURNING seat_code, price_minor`.
 - **Problem:** thousands of concurrent requests for the same seat; exactly one may win, and a multi-seat request must get all of its seats or none.
 - **Why:**
@@ -68,6 +76,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **A bare `UPDATE … WHERE seat_code = ANY(?)` without the ordered CTE:** lock order then follows the plan's scan order, which isn't guaranteed.
   - **`NOWAIT` / `SKIP LOCKED`:** faster rejection, but a seat locked by a transaction that later rolls back would be refused wrongly. Kept for the benchmark.
   - **Pessimistic and optimistic strategies:** benchmarked in P1.7–P1.8.
+
 
 ## 4. Data Transfer Object
 - **Status:** ✅
@@ -84,13 +93,23 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** try/catch in each controller. Duplicated, and error codes drift.
 
 ## 6. State
-- **Status:** ⬜ P1.3 (`ShowSeat`, `Hold`), P3.2 (`Booking`), P4.2 (`Payment`)
+- **Status:** ✅ inventory (P1.3); ⬜ P3.2 (`Booking`), P4.2 (`Payment`)
+- **Where:**
+  - **status enums:** `inventory.domain.{SeatStatus, HoldStatus, ShowStatus}`, each with `canTransitionTo(next)`.
+  - **aggregates:** `domain.Hold.{confirm(now), release(), expire(now)}`, `domain.ShowSeat.{hold, book, release}` and `domain.Show.{openSale, closeSale}`. They throw `domain.IllegalStateTransitionException` (or `HoldExpiredException`) on an illegal move.
+  - **unit tests:** `inventory/src/test/java/.../domain/` (`StatusTransitionsTest` lists every pair).
+  - **database backstop:** the same rules as `CHECK` constraints in `V3__show_seat_state_checks.sql`.
 - **Problem:** each aggregate has a lifecycle (see the state machines in plan §4.3–§4.4b). Illegal transitions, such as `CONFIRMED → HELD`, must be impossible.
-- **Plan:** each status enum declares its allowed next states (`canTransitionTo`). The aggregate's methods (`confirm()`, `release()`, `expire()`) validate the transition and throw `IllegalStateTransition`. Unit-tested without a database.
-- **Alternative:** full GoF State (one class per state). This is heavier; the enum-with-transitions form gives the same guarantee for state machines of 4–7 states. Scattered `if (status == …)` checks were rejected.
+- **Why:**
+  - **One place for the rules:** the transition table lives on the enum, and the aggregate methods add the business conditions: expiry, ownership by hold id, idempotent repeats.
+  - **No gap or overlap at expiry:** the rule `expiresAt < now` is identical in Java and SQL, so "claimable by others" and "confirmable" never overlap or leave a gap.
+  - **Hot path in SQL:** the hot claim path doesn't load aggregates; it enforces the same rules in one SQL statement (see §3). The aggregates serve confirm/release/expiry and the load-then-update strategies (P1.7).
+- **Alternative:**
+  - **Full GoF State (one class per state):** heavier. The enum-with-transitions form gives the same guarantee for state machines of 4–7 states.
+  - **Scattered `if (status == …)` checks:** rejected.
 
 ## 7. Strategy
-- **Status:** ⬜ P1.7
+- **Status:** 🔨 the port `inventory.application.port.SeatLockingStrategy` and its default `infrastructure.ConditionalUpdateStrategy` exist (P1.3); the other four and config selection are ⬜ P1.7
 - **Plan:** a `SeatLockingStrategy` interface with `PessimisticLockStrategy`, `OptimisticLockStrategy`, `ConditionalUpdateStrategy`, `RedisLockStrategy` and `RedisLuaStrategy`, selected by `inventory.locking.strategy`.
 - **Why:** the benchmark must run the same use case against each approach, so only the strategy may vary.
 - **Alternative:** separate branches or feature flags inside the use case. Untestable in isolation and violates OCP.

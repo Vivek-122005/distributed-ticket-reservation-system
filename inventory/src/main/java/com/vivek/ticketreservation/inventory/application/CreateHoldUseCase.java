@@ -6,38 +6,36 @@ import com.vivek.ticketreservation.inventory.api.HoldResult;
 import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
 import com.vivek.ticketreservation.inventory.api.ShowNotOnSaleException;
-import com.vivek.ticketreservation.inventory.infrastructure.JdbcHoldRepository;
-import com.vivek.ticketreservation.inventory.infrastructure.ShowRepository;
-import com.vivek.ticketreservation.inventory.infrastructure.ShowRow;
-import com.vivek.ticketreservation.inventory.infrastructure.JdbcSeatClaimRepository;
-import com.vivek.ticketreservation.inventory.infrastructure.JdbcSeatClaimRepository.ClaimedSeat;
+import com.vivek.ticketreservation.inventory.application.port.HoldStore;
+import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy;
+import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy.ClaimedSeat;
+import com.vivek.ticketreservation.inventory.application.port.ShowStore;
+import com.vivek.ticketreservation.inventory.domain.Hold;
+import com.vivek.ticketreservation.inventory.domain.Show;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Holds seats of one show all-or-nothing with one batched conditional update (P1.1).
+ * Holds seats of one show all-or-nothing (FR-03).
  *
- * <p>Pattern: Compare-and-Set, see docs/lld/DESIGN_PATTERNS.md#3-compare-and-set-conditional-update.
- * One round trip claims every seat that is still AVAILABLE, locking rows in seat-code order; if fewer
- * rows come back than were requested, the exception rolls back the whole transaction, including the
- * hold row and the seats that were claimed. Seats whose hold has expired are claimable at once (lazy
- * expiry, P1.2); expiry is computed by the database clock (SRS A3).
- * Known deviation: depends on Spring Data repositories directly instead of a port (SOLID.md #2, P1.3).
+ * <p>Depends only on ports (DIP, SOLID.md #2 fixed in P1.3): {@link ShowStore}, {@link HoldStore} and
+ * the {@link SeatLockingStrategy} chosen by configuration (P1.7). If the strategy claims fewer seats
+ * than requested, the exception rolls back the whole transaction, including the hold row and the
+ * seats that were claimed. Expiry is computed by the database clock (SRS A3).
  */
 @Service
 public class CreateHoldUseCase {
-    private static final Duration HOLD_DURATION = Duration.ofMinutes(5);
-    private final ShowRepository shows;
-    private final JdbcSeatClaimRepository seats;
-    private final JdbcHoldRepository holds;
+    static final Duration HOLD_DURATION = Duration.ofMinutes(5);   // BR-02
+    private final ShowStore shows;
+    private final SeatLockingStrategy locking;
+    private final HoldStore holds;
 
-    public CreateHoldUseCase(ShowRepository shows, JdbcSeatClaimRepository seats, JdbcHoldRepository holds) {
-        this.shows = shows; this.seats = seats; this.holds = holds;
+    public CreateHoldUseCase(ShowStore shows, SeatLockingStrategy locking, HoldStore holds) {
+        this.shows = shows; this.locking = locking; this.holds = holds;
     }
 
     @Transactional
@@ -48,12 +46,11 @@ public class CreateHoldUseCase {
 
         // BR-03. A sale closing concurrently with this check is harmless: the seat claims below still
         // decide ownership, and a hold granted in the same instant as the close simply expires or is paid.
-        ShowRow show = shows.findById(command.showId()).orElseThrow(() -> new ShowNotFoundException(command.showId()));
+        Show show = shows.find(command.showId()).orElseThrow(() -> new ShowNotFoundException(command.showId()));
         if (!show.isOnSale()) throw new ShowNotOnSaleException(command.showId());
 
-        UUID holdId = UUID.randomUUID();
-        Instant expiresAt = holds.insertHeld(holdId, command.showId(), command.userId(), HOLD_DURATION);
-        List<ClaimedSeat> claimed = seats.claimAvailable(command.showId(), normalized, holdId, command.userId(), expiresAt);
+        Hold hold = holds.createHeld(UUID.randomUUID(), command.showId(), command.userId(), HOLD_DURATION);
+        List<ClaimedSeat> claimed = locking.claim(command.showId(), normalized, hold.id(), command.userId(), hold.expiresAt());
         if (claimed.size() != normalized.size()) throw new SeatUnavailableException();
 
         List<HeldSeat> held = claimed.stream()
@@ -61,6 +58,6 @@ public class CreateHoldUseCase {
                 .sorted(Comparator.comparing(HeldSeat::seatCode))
                 .toList();
         long total = held.stream().mapToLong(HeldSeat::priceMinor).sum();
-        return new HoldResult(holdId, command.showId(), expiresAt, held, total, show.getCurrency());
+        return new HoldResult(hold.id(), command.showId(), hold.expiresAt(), held, total, show.currency());
     }
 }

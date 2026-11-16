@@ -46,15 +46,13 @@ class ModuleBoundaryTest {
             .should().dependOnClassesThat().resideInAPackage("..booking..")
             .because("the module graph must stay acyclic");
 
-    /**
-     * Rule 3: the domain imports no framework code. jakarta.persistence is still tolerated on
-     * {@code inventory.domain.Hold}; removing it is tracked as SOLID.md deviation #3 (P1.3).
-     */
+    /** Rule 3: the domain imports no framework or persistence code (SOLID.md deviation #3, fixed in P1.3). */
     @ArchTest
     static final ArchRule domainIsFrameworkFree = noClasses()
             .that().resideInAPackage("..domain..")
-            .should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "com.fasterxml..")
-            .because("business rules must be testable without Spring (DIP)");
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "org.springframework..", "com.fasterxml..", "jakarta.persistence..", "java.sql..", "javax.sql..")
+            .because("business rules must be testable without Spring or a database (DIP)");
 
     /** Rule 4: common is a leaf library and knows no module. */
     @ArchTest
@@ -73,6 +71,13 @@ class ModuleBoundaryTest {
             .that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAPackage("..web..")
             .because("use cases must not know about HTTP DTOs (fixes SOLID.md deviation #1)");
+
+    /** Use cases reach the outside world only through ports in application.port (SOLID.md #2, fixed in P1.3). */
+    @ArchTest
+    static final ArchRule applicationDependsOnPortsNotAdapters = noClasses()
+            .that().resideInAPackage("..application..")
+            .should().dependOnClassesThat().resideInAPackage("..infrastructure..")
+            .because("use cases depend on port interfaces; adapters implement them (DIP)");
 
     @ArchTest
     static final ArchRule publishedApiIsSelfContained = noClasses()

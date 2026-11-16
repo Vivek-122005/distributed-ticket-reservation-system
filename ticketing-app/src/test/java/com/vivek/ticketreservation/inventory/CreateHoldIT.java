@@ -56,6 +56,7 @@ class CreateHoldIT {
 
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(second.getBody()).containsEntry("code", "SEAT_UNAVAILABLE");
+        assertThat(second.getBody()).containsEntry("retryable", false).containsKey("timestamp");
         assertThat(seatStatus(jdbc, "A3")).as("all-or-nothing: A3 must not stay held").isEqualTo("AVAILABLE");
         Integer holds = jdbc.queryForObject("SELECT count(*) FROM inventory.holds", Integer.class);
         assertThat(holds).as("the failed hold row is rolled back too").isEqualTo(1);

@@ -12,7 +12,7 @@ public final class InventoryTestData {
     private InventoryTestData() { }
 
     public static void reset(JdbcTemplate jdbc) {
-        jdbc.update("UPDATE inventory.show_seats SET status = 'AVAILABLE', hold_id = NULL, held_by_user_id = NULL, hold_expires_at = NULL");
+        jdbc.update("UPDATE inventory.show_seats SET status = 'AVAILABLE', hold_id = NULL, held_by_user_id = NULL, hold_expires_at = NULL, price_minor = 150000");
         jdbc.update("DELETE FROM inventory.holds");
         jdbc.update("UPDATE inventory.shows SET status = 'ON_SALE' WHERE id = ?", DEMO_SHOW);
     }

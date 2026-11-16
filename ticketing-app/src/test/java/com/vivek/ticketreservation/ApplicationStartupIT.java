@@ -22,7 +22,7 @@ class ApplicationStartupIT {
     void flywayAppliedAllInventoryMigrations() {
         List<String> applied = jdbc.queryForList(
                 "SELECT version FROM flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank", String.class);
-        assertThat(applied).containsExactly("1", "2");
+        assertThat(applied).containsExactly("1", "2", "3");
     }
 
     @Test

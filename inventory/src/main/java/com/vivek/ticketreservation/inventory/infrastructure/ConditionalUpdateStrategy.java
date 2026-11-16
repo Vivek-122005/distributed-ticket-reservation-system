@@ -1,8 +1,9 @@
 package com.vivek.ticketreservation.inventory.infrastructure;
 
+import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -10,30 +11,26 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Hot-path seat claim on {@code inventory.show_seats}: one statement for all requested seats.
+ * {@link SeatLockingStrategy} using one batched conditional update (P1.1): the default strategy.
  *
  * <p>Pattern: Compare-and-Set, batched form (docs/lld/DESIGN_PATTERNS.md#3). The CTE locks the
- * claimable rows in {@code seat_code} order ({@code ORDER BY … FOR UPDATE}), so two
- * overlapping multi-seat requests always acquire row locks in the same order and cannot deadlock.
- * Under READ COMMITTED, a row that another transaction claimed while we waited is re-checked and
- * dropped, so it simply is not returned. The caller compares the number of claimed rows with the
- * number requested and rolls back on a mismatch (all-or-nothing).
+ * claimable rows in {@code seat_code} order ({@code ORDER BY … FOR UPDATE}), so two overlapping
+ * multi-seat requests always acquire row locks in the same order and cannot deadlock. Under READ
+ * COMMITTED, a row that another transaction claimed while we waited is re-checked and dropped, so it
+ * simply is not returned.
  *
  * <p>Lazy expiry (P1.2): a seat whose hold has passed {@code hold_expires_at} is claimable at once,
  * judged by the database clock ({@code now()}), so correctness never depends on the expiry worker
  * (P2.1) being on time. The previous hold row keeps its status until that worker marks it EXPIRED;
- * it can no longer be confirmed because confirmation also requires {@code expires_at > now()} (P1.4),
+ * it can no longer be confirmed because confirmation also requires {@code expires_at >= now()} (P1.4),
  * and the worker releases seats only {@code WHERE hold_id = <expired hold>}, so it never touches a
  * seat that has been re-held.
  *
  * <p>Plain JDBC instead of Spring Data: {@code UPDATE … RETURNING} gives the claimed seats and
  * their prices in the same round trip, which a {@code @Modifying} query cannot return.
  */
-@Repository
-public class JdbcSeatClaimRepository {
-
-    /** A seat that was claimed, with the price frozen on the show seat. */
-    public record ClaimedSeat(String seatCode, long priceMinor) { }
+@Component
+class ConditionalUpdateStrategy implements SeatLockingStrategy {
 
     private static final String CLAIM = """
             WITH target AS (
@@ -52,10 +49,10 @@ public class JdbcSeatClaimRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
-    public JdbcSeatClaimRepository(NamedParameterJdbcTemplate jdbc) { this.jdbc = jdbc; }
+    ConditionalUpdateStrategy(NamedParameterJdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    /** Claims every listed seat that is AVAILABLE or whose hold has expired; returns only the seats actually claimed. */
-    public List<ClaimedSeat> claimAvailable(UUID showId, List<String> seatCodes, UUID holdId, UUID userId, Instant expiresAt) {
+    @Override
+    public List<ClaimedSeat> claim(UUID showId, List<String> seatCodes, UUID holdId, UUID userId, Instant expiresAt) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("showId", showId)
                 .addValue("seatCodes", seatCodes.toArray(String[]::new))
