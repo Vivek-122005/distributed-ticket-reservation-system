@@ -56,7 +56,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 |---|---|---|
 | `InventoryApi` (booking's view) vs `CatalogAdminApi` (admin) | Booking sees `hold / confirm / release / get` only; venue and show creation is a separate interface | ✅ `InventoryApi` P1.4; `CatalogAdminApi` ⬜ P6.9 |
 | `PaymentApi` vs `PaymentGateway` | Booking uses `PaymentApi` (create intent, refund); only the payment module sees the PSP-level `PaymentGateway` | ⬜ P4.1 |
-| Read vs write ports (`SeatMapQuery` vs `HoldCommands`) | The seat-map read path can move to Redis or a replica without touching the write path | ⬜ P1.5, P2.3 |
+| Read vs write ports (`CatalogQuery` / `SeatMapQuery` vs `InventoryApi`) | Reads are served by `application.CatalogQueries` over the read-only port `CatalogReadStore`; the hold write path shares no interface with them, so the seat map can move to Redis (P2.3) or a replica (P7.5) alone | ✅ P1.5; Redis ⬜ P2.3 |
 
 **Without it:** one fat `InventoryService` interface. Every consumer recompiles for unrelated changes, and extraction has to expose everything.
 

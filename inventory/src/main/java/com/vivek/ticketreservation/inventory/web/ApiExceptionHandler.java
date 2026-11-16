@@ -1,11 +1,15 @@
 package com.vivek.ticketreservation.inventory.web;
 
+import com.vivek.ticketreservation.inventory.api.EventNotFoundException;
 import com.vivek.ticketreservation.inventory.api.HoldConflictException;
 import com.vivek.ticketreservation.inventory.api.HoldNotFoundException;
 import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
 import com.vivek.ticketreservation.inventory.api.ShowNotOnSaleException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.*;
 
 /** Pattern: centralised exception translation, see docs/lld/DESIGN_PATTERNS.md#5. */
@@ -30,6 +34,15 @@ public class ApiExceptionHandler {
     @ExceptionHandler(HoldConflictException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     ApiError holdConflict(HoldConflictException error) { return ApiError.of(error.reason().name(), error.getMessage(), false); }
+
+    @ExceptionHandler(EventNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    ApiError eventNotFound(EventNotFoundException error) { return ApiError.of("EVENT_NOT_FOUND", error.getMessage(), false); }
+
+    /** Bean Validation on bodies, malformed ids, missing headers: all the same stable INVALID_REQUEST shape. */
+    @ExceptionHandler({MethodArgumentNotValidException.class, MethodArgumentTypeMismatchException.class, MissingRequestHeaderException.class})
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    ApiError malformed(Exception error) { return ApiError.of("INVALID_REQUEST", "Request is malformed or fails validation", false); }
 
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

@@ -407,3 +407,40 @@ A running record of **what was built, in which phase, in which part of the syste
     - another user gets 404 on all three operations, and the seat is unchanged.
   - **OpenAPI spec:** still validates.
 - **ADR:** none
+
+### P1.5 — Catalog and seat-map read APIs
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **`inventory.api`:** `CatalogQuery`, `SeatMapQuery`, `EventNotFoundException`.
+  - **`inventory.application`:** `CatalogQueries`, `port.CatalogReadStore`.
+  - **`inventory.infrastructure`:** `JdbcCatalogReadStore`.
+  - **`inventory.web`:** `CatalogController`, `ApiExceptionHandler` (+ `EVENT_NOT_FOUND` and uniform 400s).
+  - **Tests and docs:** `CatalogReadIT`; API spec, plan, registries (new pattern #21), class diagram.
+- **What was built:**
+  - **`GET /api/v1/events?page&size`:** published events only, paged (size 1–100), with `totalItems`.
+  - **`GET /api/v1/events/{id}/shows`:** shows in start order, with venue name and a live `availableSeats` count. A draft or unknown event → 404 `EVENT_NOT_FOUND`.
+  - **`GET /api/v1/shows/{id}/seats?section=`:** every seat with section, row, column, price and status, ordered by section/row/column, plus `generatedAt` (database time). An unknown show → 404.
+  - **Uniform 400s:** malformed UUIDs, missing `X-User-Id` and body-validation failures now return the standard `ApiError` (`INVALID_REQUEST`) instead of Spring's default error page.
+- **Why this approach:**
+  - **Read side separate from day one (ISP, pattern #21):** reads are 100× more frequent than holds during a sale and may be slightly stale; holds must not be. Separate interfaces and a separate port mean P2.3 can serve the seat map from Redis without touching the hold path.
+  - **Lazy expiry applied to reads:** a seat whose hold ran out shows as `AVAILABLE`, using the same SQL condition as the claim. Users are never told "taken" for a seat they could get, and the count in `availableSeats` agrees.
+  - **Views returned as-is:** the query records are transport-free and already match the contract schemas. Copying them into identical web DTOs would add code without decoupling anything. Write-side responses keep their own DTOs, where the shapes differ.
+  - **Unpublished events hidden as 404:** draft catalog entries stay invisible to customers (UC-01).
+  - **`generatedAt` from the database clock:** it tells clients and the future cache layer *when* the snapshot was valid.
+- **Alternatives considered:**
+  - **Keyset pagination for events:** better for deep pages, but the event list is small. Offset is simpler and matches the contract.
+  - **Counting availability with a counter column on `shows`:** cheaper reads, but every hold, release and expiry would update the same hot row, which is exactly the contention this system avoids. Redis (P2.3) is the planned answer.
+  - **Spring's default 400 handling (`ProblemDetail`):** standard, but a second error shape next to ours, against the agreed format.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 57 unit/architecture tests and 37 ITs.
+  - **`CatalogReadIT` (8 tests):**
+    - only published events, with paging metadata;
+    - size 101 → 400;
+    - show list with venue and `availableSeats` = 98 after a 2-seat hold;
+    - draft and unknown events → 404;
+    - the seat map covers 100 seats with layout and price; a live hold shows `HELD` and an expired one `AVAILABLE`;
+    - the section filter is case-insensitive and an unknown section is empty;
+    - unknown show → 404;
+    - malformed id → 400 in the standard shape.
+  - **OpenAPI spec:** still validates.
+- **ADR:** none

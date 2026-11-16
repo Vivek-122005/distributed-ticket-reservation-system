@@ -35,6 +35,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | ⬜ P7.8 | HTTP adapters (Resilience4j) |
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
 | 20 | [Fencing token](#20-fencing-token) | Concurrency | ⬜ P1.7 | `RedisLockStrategy` |
+| 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
 
@@ -191,3 +192,19 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Plan:** `RedisLockStrategy` gets a monotonically increasing token with the lock. The DB write includes `WHERE lock_token < :token`.
 - **Why:** a Redis lock can expire during a GC pause, so two holders are possible. The fencing token makes the stale holder's write fail.
 - **Alternative:** Redlock without fencing. Not safe under pauses or clock drift (Kleppmann's critique).
+
+## 21. Read/write separation (CQRS-lite)
+- **Status:** ✅ P1.5 (Redis read model in P2.3)
+- **Where:**
+  - **Published read interfaces:** `inventory.api.CatalogQuery` and `SeatMapQuery`, implemented by `application.CatalogQueries` (`@Transactional(readOnly = true)`).
+  - **Read port:** `application.port.CatalogReadStore`, which returns ready-made views and no aggregates.
+  - **Adapter:** `infrastructure.JdbcCatalogReadStore`.
+  - **HTTP:** `web.CatalogController`.
+- **Problem:** seat-map reads outnumber writes by orders of magnitude during a sale. They must be cacheable and allowed to lag slightly, while the hold path must stay strictly consistent.
+- **Why:**
+  - **Separate paths from the start:** reads go through their own interfaces and port, share no model with the write side, and return the contract's view records directly.
+  - **Lazy expiry in reads too:** the read model applies the same rule as the claim (`HELD` + expired = `AVAILABLE`), so it never shows a seat as taken when a hold for it would succeed.
+  - **Swappable read store:** P2.3 can replace `CatalogReadStore` with Redis without touching holds.
+- **Alternative:**
+  - **Full CQRS with a separate read database fed by events:** too much machinery until load tests show Postgres reads are the bottleneck. The event feed arrives with the outbox in P5.
+  - **Reusing the write aggregates for reads:** loads more than the view needs and couples cache decisions to the domain.

@@ -128,6 +128,21 @@ classDiagram
       <<interface>>
       +seatMap(showId, section) SeatMapView
     }
+    class CatalogQuery {
+      <<interface>>
+      +listEvents(page, size) Page~EventView~
+      +listShows(eventId) List~ShowView~
+    }
+    class CatalogReadStore {
+      <<interface>>
+      +publishedEvents(offset, limit) List~EventView~
+      +showsOfPublishedEvent(eventId) Optional
+      +seatMap(showId, section) Optional~SeatMapView~
+    }
+    CatalogQuery <|.. CatalogQueries
+    SeatMapQuery <|.. CatalogQueries
+    CatalogQueries --> CatalogReadStore
+    CatalogReadStore <|.. JdbcCatalogReadStore
     class CreateHoldUseCase {
       -SeatLockingStrategy locking
       -HoldStore holds

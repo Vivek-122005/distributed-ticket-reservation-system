@@ -12,7 +12,8 @@ info:
     extracted into `inventory-service` (P7.8). Catalog reads and the seat map are public.
 
     **Implementation status** is marked per operation with `x-plan-part` (see docs/PROJECT_PLAN.md).
-    Implemented today: the hold lifecycle (create P1.0–P1.2, get / confirm / release P1.4). Every
+    Implemented today: catalog and seat-map reads (P1.5) and the hold lifecycle (create P1.0–P1.2,
+    get / confirm / release P1.4). Every
     hold operation checks ownership via `X-User-Id`; another user's hold answers 404.
 
     **Idempotency:** confirm and release are naturally idempotent (repeating them returns the same
@@ -39,7 +40,7 @@ paths:
       tags: [Catalog]
       operationId: listEvents
       summary: List published events
-      x-plan-part: P1.5
+      x-plan-part: P1.5 (implemented)
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
@@ -55,7 +56,7 @@ paths:
       tags: [Catalog]
       operationId: listShows
       summary: List shows (date + venue) of an event
-      x-plan-part: P1.5
+      x-plan-part: P1.5 (implemented)
       parameters:
         - $ref: '#/components/parameters/EventId'
       responses:
@@ -74,10 +75,12 @@ paths:
       operationId: getSeatMap
       summary: Seat map of a show with current availability
       description: |
+        A seat whose hold has expired is reported `AVAILABLE` (lazy expiry, P1.2), because a hold
+        request for it would succeed. Seats are ordered by section, row, column.
         Served from the Redis availability cache once P2.3 is built, so it may lag the database by
         well under a second. A stale "available" seat only leads to a fast 409 on hold, never an
         oversell. Live changes are pushed on WebSocket topic `/topic/shows/{showId}/seats` (P5.11).
-      x-plan-part: P1.5
+      x-plan-part: P1.5 (implemented)
       parameters:
         - $ref: '#/components/parameters/ShowId'
         - name: section
