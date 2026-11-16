@@ -641,3 +641,30 @@ A running record of **what was built, in which phase, in which part of the syste
     - `holds_expired_total` = 3, `seats_released_by_expiry_total` = 4, `hold_expiry_failures_total` = 0.
 - **Environment note:** Docker Desktop restarted during this part and stopped the Compose containers. They were brought back with `POSTGRES_PORT=55432 docker compose up -d postgres redis`.
 - **ADR:** none
+
+### P2.2 — No leader election: competing expiry workers
+- **Date:** 2026-11-16
+- **Module / files:** `ReleaseHoldUseCase` (publishes `HoldExpired`), new `ExpiryWorkersIT`; plan, DESIGN_PATTERNS (new #23)
+- **Decision:** every replica runs the expiry worker. There is **no ShedLock and no leader election.** `FOR UPDATE SKIP LOCKED` turns the `holds` table into a work queue: concurrent workers lock disjoint batches and never wait on each other.
+- **What was built:**
+  - **`eightConcurrentWorkersExpireEveryHoldExactlyOnce`:** 2,000 expired holds (100 owning a seat, 1,900 whose seats were re-held long ago) are drained by 8 workers started together through the contention harness, each looping `runBatch(50)`. The test checks:
+    - every hold expired exactly once, and the per-worker sums add up to 2,000;
+    - more than one worker did real work;
+    - all 100 seats are back to `AVAILABLE`;
+    - exactly 2,000 `HoldExpired` events with 2,000 distinct ids;
+    - the invariants still hold.
+  - **`releaseRacingTheWorkerOnAnExpiredHoldAnnouncesTheExpiryOnce`:** a release and a worker hit the same expired hold at once. The hold ends `EXPIRED`, with exactly one event listing both seats.
+  - **Gap fixed in passing:** when *release* found an already-expired hold, it recorded `EXPIRED` but published nothing, so a downstream listener (the booking saga, P4) would never have heard of that expiry. It now publishes the same `HoldExpired` as the worker. The hold-row lock guarantees only one of the two ever records it.
+- **Why this approach:**
+  - **The job can be partitioned:** each hold is independent, so parallel workers are strictly better than one runner. ShedLock exists for jobs that *must* run once at a time (for example "send the daily report"), which this is not.
+  - **Fewer moving parts:** no lock table, no lock TTL to tune, and no situation where a crashed leader delays cleanup until its lease runs out.
+  - **The event is part of the transition, not of the worker:** "whoever records `EXPIRED` publishes `HoldExpired`" makes the rule simple to check, and it holds for any future code path.
+- **Alternatives considered:**
+  - **ShedLock with JDBC:** correct but serial, and needs extra schema plus `lockAtMostFor` tuning.
+  - **Kubernetes Lease-based leader election:** ties the app to the platform, and gives no benefit over `SKIP LOCKED` here.
+  - **Sharding holds by hash across replicas (`WHERE hashtext(id) % n = k`):** needs to know the replica count, and rebalancing is manual. `SKIP LOCKED` adapts automatically.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 137 tests and 1 skipped.
+  - **Run log:** "8 workers expired 2000 holds in 0.12 s (550, 200, 400, 500, 50, 300, 0, 0 per worker)". The two idle workers are expected: they started after the queue was drained.
+- **Environment note:** `git push` hung twice after Docker Desktop restarted. The macOS keychain credential helper was waiting on an invisible prompt. Pushes now use `gh`'s stored credentials (`credential.helper=!gh auth git-credential`) with a 60 s timeout.
+- **ADR:** none (a reversible, local choice, recorded in the pattern registry)

@@ -6,13 +6,16 @@ import com.vivek.ticketreservation.inventory.api.HoldNotFoundException;
 import com.vivek.ticketreservation.inventory.api.HoldResult;
 import com.vivek.ticketreservation.inventory.application.port.DatabaseClock;
 import com.vivek.ticketreservation.inventory.application.port.HoldStore;
+import com.vivek.ticketreservation.inventory.application.port.InventoryEventPublisher;
 import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore;
 import com.vivek.ticketreservation.inventory.domain.Hold;
 import com.vivek.ticketreservation.inventory.domain.IllegalStateTransitionException;
+import com.vivek.ticketreservation.inventory.domain.event.HoldExpired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -21,7 +24,9 @@ import java.util.UUID;
  * <p>A HELD hold that is already past expiry is recorded as EXPIRED instead of RELEASED, which is what
  * really happened. Seats are freed only {@code WHERE hold_id = this hold}, so seats that were lazily
  * re-held by someone else are left alone; that is why the released count is not checked.
- * Idempotent: releasing a RELEASED or EXPIRED hold returns it unchanged.
+ * Recording an expiry publishes {@link HoldExpired}, exactly as the expiry worker does (P2.2), so
+ * listeners see every expiry once, whoever recorded it. Idempotent: releasing a RELEASED or EXPIRED hold
+ * returns it unchanged.
  */
 @Service
 public class ReleaseHoldUseCase {
@@ -29,9 +34,10 @@ public class ReleaseHoldUseCase {
     private final ShowSeatStore seats;
     private final DatabaseClock clock;
     private final HoldViews views;
+    private final InventoryEventPublisher events;
 
-    ReleaseHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views) {
-        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views;
+    ReleaseHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views, InventoryEventPublisher events) {
+        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views; this.events = events;
     }
 
     @Transactional
@@ -39,7 +45,12 @@ public class ReleaseHoldUseCase {
         Hold hold = holds.lock(holdId).filter(h -> h.belongsTo(userId)).orElseThrow(() -> new HoldNotFoundException(holdId));
         Instant now = clock.now();
         try {
-            if (hold.expire(now) || hold.release()) {
+            if (hold.expire(now)) {
+                // Same outcome as the expiry worker, so the same event: whoever records an expiry announces it.
+                List<String> released = seats.releaseSeatsOfHolds(List.of(holdId)).getOrDefault(holdId, List.of());
+                holds.saveStatus(hold);
+                events.publish(new HoldExpired(hold.id(), hold.showId(), hold.userId(), now, released));
+            } else if (hold.release()) {
                 seats.releaseSeatsOf(holdId);
                 holds.saveStatus(hold);
             }

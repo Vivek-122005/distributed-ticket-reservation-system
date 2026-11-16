@@ -36,6 +36,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
 | 20 | [Fencing token](#20-fencing-token) | Concurrency | ✅ P1.7 | `RedisLockStrategy` + `show_seats.lock_fence` |
 | 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy` |
+| 23 | [Competing consumers (SKIP LOCKED work queue)](#23-competing-consumers-skip-locked-work-queue) | Concurrency | ✅ P2.1–P2.2 | `ExpireHoldsJob` via `JdbcHoldStore.lockExpired` |
 | 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
@@ -247,3 +248,20 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:**
   - **Copying the conditional-update SQL into the Redis class:** two copies of the critical query.
   - **Inheritance (`RedisLuaStrategy extends ConditionalUpdateStrategy`):** this ties the filter to one authority.
+
+## 23. Competing consumers (SKIP LOCKED work queue)
+- **Status:** ✅ P2.1–P2.2
+- **Where:**
+  - **The job:** `inventory.application.ExpireHoldsJob.runBatch`, which uses `JdbcHoldStore.lockExpired`: `SELECT … WHERE status = 'HELD' AND expires_at < now() ORDER BY expires_at LIMIT n FOR UPDATE SKIP LOCKED`.
+  - **Who runs it:** every replica, through `infrastructure.ScheduledHoldExpiry`.
+  - **Proof:** `ticketing-app/.../inventory/ExpiryWorkersIT.java`.
+- **Problem:** expired holds must be cleaned up by *some* replica. Two replicas must never expire the same hold twice, which would mean double events and a double "booking expired", and one slow replica must not block the others.
+- **Why:**
+  - **The table is the queue:** each worker locks a different slice of due rows, and rows locked by another worker are skipped instead of waited for.
+  - **No leader needed:** no lock table, no leader to elect or fail over. More replicas means more cleanup capacity.
+  - **Crash-safe:** if a worker dies mid-batch, its transaction rolls back and the rows are simply picked up next tick.
+  - **Measured:** 8 workers, 2,000 holds, each expired exactly once, with work split 550/500/400/300/200/50/0/0 and no event duplicated.
+- **Alternative:**
+  - **ShedLock (one replica runs the job at a time, via a lock row):** a correct, popular choice when a job *can't* be partitioned. Here it would only remove parallelism, and adds a lock table plus TTL tuning (a lock held past a crash delays cleanup until it expires).
+  - **Leader election (Kubernetes Lease, ZooKeeper):** same single-runner result, with more infrastructure.
+  - **A message queue of expiry timers:** precise, but a second source of truth about holds.
