@@ -5,12 +5,24 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ticket_reservation}
     username: ${DB_USERNAME:ticket}
     password: ${DB_PASSWORD:ticket}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   flyway:
     enabled: true
     # One folder per module. Tables live in per-module schemas (inventory.*, from V2); the shared
     # history table stays in public until booking gets its own migrations (P3.1).
     locations: classpath:db/migration/inventory
+inventory:
+  locking:
+    # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
+    strategy: ${LOCKING_STRATEGY:conditional-update}
 management:
+  health:
+    redis:
+      # Redis is only needed by the redis-* strategies today; it becomes part of health with P2.
+      enabled: ${REDIS_HEALTH:false}
   endpoints:
     web:
       exposure:

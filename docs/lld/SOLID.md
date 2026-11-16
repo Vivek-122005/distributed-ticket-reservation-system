@@ -31,7 +31,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 
 | Where | How it is applied | Status |
 |---|---|---|
-| `SeatLockingStrategy` | A new locking approach is a new class plus a config value; the hold use case does not change | ⬜ P1.7 |
+| `SeatLockingStrategy` | A new locking approach is a new class plus one `case` in `SeatLockingConfig` and a config value; `CreateHoldUseCase` does not change (five strategies exist) | ✅ P1.7 |
 | `PaymentGateway` | Adding Stripe next to Razorpay is a new adapter, not an edit to payment logic | ⬜ P4.1 |
 | `IdempotentEventConsumer` | A new consumer extends the base; dedup and retry code stays untouched | ⬜ P5.5 |
 | Kafka pub/sub | A new side effect (for example SMS) is a new consumer group; producers are unchanged | ⬜ P5 |
@@ -43,7 +43,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 
 | Where | How it is applied | Status |
 |---|---|---|
-| All `SeatLockingStrategy` implementations | One shared contract test suite (exactly-N winners, no partial holds, no deadlocks) runs against **every** strategy. The suite exists (`SeatContentionIT`, P1.6) and runs against `ConditionalUpdateStrategy`; P1.7 parameterises it over all strategies | 🔨 P1.6 ✅, P1.7 ⬜ |
+| All `SeatLockingStrategy` implementations | One shared contract suite (`SeatLockingContract`: exactly-N winners, no partial holds, no deadlocks, expired-seat stampede, confirm vs release) runs against **all five** strategies via `*LockingIT` subclasses that only select the strategy | ✅ P1.6–P1.7 |
 | `MockPaymentGateway` / `SandboxPaymentGateway` | Same contract tests: idempotent `capture`; `fetchStatus` returns the same outcome as the original call; timeouts surface as `GatewayTimeout`, never as a fake failure | ⬜ P4.1 |
 | `InProcessInventoryAdapter` / `HttpInventoryAdapter` | Same results and error codes (`SEAT_UNAVAILABLE`, `HOLD_EXPIRED`), so extraction does not change booking behaviour | ⬜ P7.8 |
 

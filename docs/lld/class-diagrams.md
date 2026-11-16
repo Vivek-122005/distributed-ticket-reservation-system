@@ -217,7 +217,7 @@ classDiagram
 |---|---|---|
 | `InventoryApi`, `CatalogAdminApi`, `SeatMapQuery` | Facade + ISP: booking sees only hold operations; admin and read paths are separate interfaces | P0.14, P1.5, P6.9 |
 | `InventoryFacade` | Facade: the module's single entry point, delegating to one use case per operation (SRP) | P0.14 |
-| `SeatLockingStrategy` + 5 implementations | Strategy + OCP; one contract test suite for all (LSP) | P1.7 |
+| `SeatLockingStrategy` + 5 implementations | Strategy + OCP; built by the `SeatLockingConfig` factory method; one contract suite for all (LSP); `RedisLuaStrategy` decorates `ConditionalUpdateStrategy` | P1.7 ✅ |
 | `HoldStore` ← `JdbcHoldStore`, `ShowStore` ← `JdbcShowStore` | Repository behind a port (DIP); JDBC because every query needs explicit SQL and the DB clock (`createHeld` computes expiry in Postgres, SRS A3) | P1.3 ✅ |
 
 ---

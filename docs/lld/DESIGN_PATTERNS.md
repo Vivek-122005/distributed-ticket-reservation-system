@@ -21,7 +21,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
 | 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3); ⬜ P3.2, P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
-| 7 | [Strategy](#7-strategy) | Behavioural (GoF) | 🔨 port + default (P1.3); others ⬜ P1.7 | `SeatLockingStrategy` ← `ConditionalUpdateStrategy` |
+| 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ✅ P1.7 | `SeatLockingStrategy` ← 5 strategies, chosen by `SeatLockingConfig` |
 | 8 | [Adapter](#8-adapter) | Structural (GoF) | ⬜ P4.1, P3.3 | `PaymentGateway`, `InventoryApi` adapters |
 | 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
@@ -34,7 +34,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 17 | [Chain of Responsibility](#17-chain-of-responsibility) | Behavioural (GoF) | ⬜ P6.1–P6.5 | gateway filters |
 | 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | ⬜ P7.8 | HTTP adapters (Resilience4j) |
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
-| 20 | [Fencing token](#20-fencing-token) | Concurrency | ⬜ P1.7 | `RedisLockStrategy` |
+| 20 | [Fencing token](#20-fencing-token) | Concurrency | ✅ P1.7 | `RedisLockStrategy` + `show_seats.lock_fence` |
+| 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy` |
 | 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
@@ -110,10 +111,25 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Scattered `if (status == …)` checks:** rejected.
 
 ## 7. Strategy
-- **Status:** 🔨 the port `inventory.application.port.SeatLockingStrategy` and its default `infrastructure.ConditionalUpdateStrategy` exist (P1.3); the other four and config selection are ⬜ P1.7
-- **Plan:** a `SeatLockingStrategy` interface with `PessimisticLockStrategy`, `OptimisticLockStrategy`, `ConditionalUpdateStrategy`, `RedisLockStrategy` and `RedisLuaStrategy`, selected by `inventory.locking.strategy`.
-- **Why:** the benchmark must run the same use case against each approach, so only the strategy may vary.
-- **Alternative:** separate branches or feature flags inside the use case. Untestable in isolation and violates OCP.
+- **Status:** ✅ P1.7
+- **Where:**
+  - **Port:** `inventory.application.port.SeatLockingStrategy`, the only type `CreateHoldUseCase` knows.
+  - **Implementations:** five package-private classes in `inventory.infrastructure.locking`:
+    - `ConditionalUpdateStrategy` (c, default): one ordered `UPDATE … RETURNING`.
+    - `PessimisticLockStrategy` (a): `SELECT … ORDER BY … FOR UPDATE`, domain check, `UPDATE`.
+    - `OptimisticLockStrategy` (b): read without locks, write `WHERE version = ?`, retry up to 3×.
+    - `RedisLockStrategy` (d): `SET NX PX` per seat plus a fencing token, then the database write.
+    - `RedisLuaStrategy` (e): an atomic Lua check-and-set in Redis as a filter, decorating (c).
+  - **Selection:** `SeatLockingConfig.seatLockingStrategy(…)` is a factory method that builds only the strategy named by `inventory.locking.strategy` (`LockingProperties`). An unknown value fails startup with the allowed values.
+  - **Contract tests:** `ticketing-app/.../inventory/SeatLockingContract.java`, one subclass per strategy (`*LockingIT`).
+- **Problem:** the benchmark (P1.8) must run *the same* use case against each approach, and production must be able to switch strategy without code changes.
+- **Why:**
+  - **OCP:** a new strategy is one class plus one `case`; the use case and its tests don't change.
+  - **LSP is enforced, not assumed:** all five strategies pass the same contract suite. That covers exactly-one winner, exactly 100 of 100, no partial multi-seat holds, no deadlocks, the expired-seat stampede, and confirm vs release.
+  - **Decision logic reused:** the load-then-update strategies use the domain `ShowSeat.isClaimable/hold` rules, so the decision itself lives in one place.
+- **Alternative:**
+  - **`@ConditionalOnProperty` on five `@Component`s:** this works too, but spreads the choice over five files and allows zero or two beans by mistake.
+  - **Branches inside the use case:** untestable in isolation, and violates OCP.
 
 ## 8. Adapter
 - **Status:** ⬜ P4.1 (payment), P3.3 / P7.8 (inventory)
@@ -188,10 +204,21 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** fixed window (bursts at window edges), sliding log (memory per request). Compared in ADR 005.
 
 ## 20. Fencing token
-- **Status:** ⬜ P1.7
-- **Plan:** `RedisLockStrategy` gets a monotonically increasing token with the lock. The DB write includes `WHERE lock_token < :token`.
-- **Why:** a Redis lock can expire during a GC pause, so two holders are possible. The fencing token makes the stale holder's write fail.
-- **Alternative:** Redlock without fencing. Not safe under pauses or clock drift (Kleppmann's critique).
+- **Status:** ✅ P1.7
+- **Where:**
+  - **Token issue:** `inventory.infrastructure.locking.RedisLockStrategy` gets a token with `INCR fence:{showId}`.
+  - **Guarded write:** `UPDATE … SET lock_fence = :token … WHERE id = ANY(:ids) AND lock_fence < :token`.
+  - **Column:** `show_seats.lock_fence` (V5).
+  - **Re-seeding:** a lost counter is re-seeded from `max(lock_fence)` in Postgres (`nextToken`).
+- **Problem:** a Redis lock can expire while its holder is paused (GC, network). The holder then writes believing it still owns the lock.
+- **Why:**
+  - **Storage checks the token:** the store accepts a write only with a newer token than the last one, so a stale holder's late write is rejected once a newer holder has written (tested: `writeWithAStaleFencingTokenIsRejected`).
+  - **Locks released at transaction end:** the locks are freed by a transaction synchronisation after commit or rollback. Otherwise a second client could read the seat before our write is visible.
+  - **Counter re-seeding:** without it, losing the Redis counter makes every later write fail. The tests found this.
+- **Known limit, documented in the class:** a stale holder can still win if the newer holder hasn't written yet. Locks alone are not a safe source of truth, which is why Postgres stays the authority (ADR 001) and why ADR 003 doesn't choose this strategy.
+- **Alternative:**
+  - **Redlock across several Redis nodes:** more infrastructure, and still debated as unsafe without fencing.
+  - **ZooKeeper/etcd leases with revision numbers:** proper fencing, but a third system on the hot path.
 
 ## 21. Read/write separation (CQRS-lite)
 - **Status:** ✅ P1.5 (Redis read model in P2.3)
@@ -208,3 +235,15 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:**
   - **Full CQRS with a separate read database fed by events:** too much machinery until load tests show Postgres reads are the bottleneck. The event feed arrives with the outbox in P5.
   - **Reusing the write aggregates for reads:** loads more than the view needs and couples cache decisions to the domain.
+
+## 22. Decorator
+- **Status:** ✅ P1.7
+- **Where:** `inventory.infrastructure.locking.RedisLuaStrategy` implements `SeatLockingStrategy` and wraps another `SeatLockingStrategy`, the `ConditionalUpdateStrategy`. `SeatLockingConfig` composes them.
+- **Problem:** the Redis filter adds behaviour *in front of* the authoritative claim: reject early, set marks, and undo them on rollback. It must not duplicate or change the claim itself.
+- **Why:**
+  - **Same interface:** the decorator has the same interface, so the use case can't tell the difference.
+  - **Composable:** the filter can wrap any authority strategy, which is how P2.4 will use it.
+  - **Safe by construction:** the database decision stays in one class, so the filter can only ever *reject* more, never *accept* more. False rejects are possible; oversells are not.
+- **Alternative:**
+  - **Copying the conditional-update SQL into the Redis class:** two copies of the critical query.
+  - **Inheritance (`RedisLuaStrategy extends ConditionalUpdateStrategy`):** this ties the filter to one authority.

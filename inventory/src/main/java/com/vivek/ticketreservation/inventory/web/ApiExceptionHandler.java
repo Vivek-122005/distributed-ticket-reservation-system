@@ -6,6 +6,7 @@ import com.vivek.ticketreservation.inventory.api.HoldNotFoundException;
 import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
 import com.vivek.ticketreservation.inventory.api.ShowNotOnSaleException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -43,6 +44,13 @@ public class ApiExceptionHandler {
     @ExceptionHandler({MethodArgumentNotValidException.class, MethodArgumentTypeMismatchException.class, MissingRequestHeaderException.class})
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     ApiError malformed(Exception error) { return ApiError.of("INVALID_REQUEST", "Request is malformed or fails validation", false); }
+
+    /** Database or Redis unreachable: the request did nothing and may be retried later (schema Unavailable). */
+    @ExceptionHandler(DataAccessResourceFailureException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    ApiError unavailable(DataAccessResourceFailureException error) {
+        return ApiError.of("SERVICE_UNAVAILABLE", "A dependency is unavailable, retry with backoff", true);
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

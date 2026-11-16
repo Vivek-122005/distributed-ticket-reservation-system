@@ -1,9 +1,8 @@
-package com.vivek.ticketreservation.inventory.infrastructure;
+package com.vivek.ticketreservation.inventory.infrastructure.locking;
 
 import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -11,7 +10,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * {@link SeatLockingStrategy} using one batched conditional update (P1.1): the default strategy.
+ * {@link SeatLockingStrategy} (c): one batched conditional update (P1.1). The default strategy; created by
+ * {@link SeatLockingConfig}.
  *
  * <p>Pattern: Compare-and-Set, batched form (docs/lld/DESIGN_PATTERNS.md#3). The CTE locks the
  * claimable rows in {@code seat_code} order ({@code ORDER BY … FOR UPDATE}), so two overlapping
@@ -29,7 +29,6 @@ import java.util.UUID;
  * <p>Plain JDBC instead of Spring Data: {@code UPDATE … RETURNING} gives the claimed seats and
  * their prices in the same round trip, which a {@code @Modifying} query cannot return.
  */
-@Component
 class ConditionalUpdateStrategy implements SeatLockingStrategy {
 
     private static final String CLAIM = """

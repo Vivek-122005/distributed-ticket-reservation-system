@@ -31,6 +31,8 @@ POSTGRES_PORT=55432 docker compose up -d
 DB_URL=jdbc:postgresql://localhost:55432/ticket_reservation mvn -pl ticketing-app spring-boot:run
 ```
 
+Seat locking strategy: `LOCKING_STRATEGY=conditional-update` (default), `pessimistic`, `optimistic`, `redis-lock` or `redis-lua` (the Redis ones need `docker compose up -d redis`). See ADR 003.
+
 Tests: `mvn verify` runs unit and architecture tests, then integration tests against a throwaway PostgreSQL container (Testcontainers; Docker must be running).
 
 The app starts at `http://localhost:8080`.

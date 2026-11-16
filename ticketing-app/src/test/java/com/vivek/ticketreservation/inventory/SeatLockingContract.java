@@ -29,21 +29,33 @@ import static com.vivek.ticketreservation.support.InventoryTestData.DEMO_SHOW;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * P1.6: the concurrency guarantees under real contention on Postgres (FR-03, NFR-01, invariants 1-2).
+ * The {@code SeatLockingStrategy} contract (P1.6, run against every strategy in P1.7): the concurrency
+ * guarantees under real contention on Postgres (FR-03, NFR-01, invariants 1-2).
  *
- * <p>A pool of 50 connections lets up to 50 transactions fight at the database at once; thousands of
- * attempts queue for them, as requests would in production. Every test ends with the invariant check.
- * Any exception other than the expected business outcome (for example a deadlock) fails the test.
+ * <p>LSP enforced by test: each strategy has a subclass that only selects it ({@code *LockingIT}), and
+ * all of them must pass the same tests. A pool of 50 connections lets up to 50 transactions fight at the
+ * database at once; thousands of attempts queue for them, as requests would in production. Every test
+ * ends with the invariant check. Any exception other than the expected business outcome (for example a
+ * deadlock) fails the test.
  */
 @IntegrationTest
 @TestPropertySource(properties = "spring.datasource.hikari.maximum-pool-size=50")
-class SeatContentionIT {
+abstract class SeatLockingContract {
 
     @Autowired InventoryApi inventory;
     @Autowired JdbcTemplate jdbc;
 
     @BeforeEach
-    void reset() { InventoryTestData.reset(jdbc); }
+    void reset() {
+        InventoryTestData.reset(jdbc);
+        resetStrategyState();
+    }
+
+    /** Clears any state a strategy keeps outside Postgres (Redis marks and locks). */
+    protected void resetStrategyState() { }
+
+    /** Tells the strategy that a hold was expired by editing the database directly (test-only time travel). */
+    protected void afterManualExpiry(HoldResult hold) { }
 
     @Test
     void fr03_500AttemptsForOneSeatHaveExactlyOneWinner() throws Exception {
@@ -105,6 +117,7 @@ class SeatContentionIT {
         HoldResult old = hold("A50");
         jdbc.update("UPDATE inventory.holds SET expires_at = now() - interval '1 second' WHERE id = ?", old.holdId());
         jdbc.update("UPDATE inventory.show_seats SET hold_expires_at = now() - interval '1 second' WHERE hold_id = ?", old.holdId());
+        afterManualExpiry(old);
 
         List<Outcome<HoldResult>> outcomes = Contention.race(300, i -> hold("A50"));
 

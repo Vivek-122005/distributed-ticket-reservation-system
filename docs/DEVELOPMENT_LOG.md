@@ -481,3 +481,46 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Repeating each test many times:** slower CI. The mutation runs showed the current sizes already expose both bug classes.
 - **How it was verified:** `mvn verify`: BUILD SUCCESS, 57 unit/architecture tests and 43 ITs. `SeatContentionIT` (6 tests) runs in about 3 s. The two mutation runs are described above.
 - **ADR:** none
+
+### P1.7 — Five seat-locking strategies behind one port
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **`inventory.infrastructure.locking`:** `SeatLockingConfig`, `LockingProperties`, `SeatRows`, `ConditionalUpdateStrategy` (moved here), and new `PessimisticLockStrategy`, `OptimisticLockStrategy`, `RedisLockStrategy`, `RedisLuaStrategy`.
+  - **Migration:** `V5__show_seat_lock_fence.sql`.
+  - **Config:** `inventory/pom.xml` (+ Spring Data Redis), `application.yml` (strategy, Redis host, Redis health off by default).
+  - **Web:** `ApiExceptionHandler` (503 `SERVICE_UNAVAILABLE` when Postgres or Redis is unreachable).
+  - **Tests:** `SeatLockingContract` (was `SeatContentionIT`) plus five `*LockingIT`, and `RedisContainerConfig`; `@IntegrationTest` is now `@Inherited`.
+  - **Docs:** registries (Strategy, Fencing token ✅, new Decorator #22), class diagram, plan, README.
+- **What was built:**
+  - **(a) Pessimistic:** lock all requested rows in seat order (`FOR UPDATE`), let `ShowSeat` decide, then one `UPDATE`.
+  - **(b) Optimistic:** read without locks; write each seat `WHERE version = :read` in seat order; on a version conflict re-read and retry (max 3). Seats already won by this hold are recognised by hold id.
+  - **(c) Conditional update:** unchanged (P1.1–P1.2), still the default.
+  - **(d) Redis lock:**
+    1. `INCR` a per-show fencing token.
+    2. Take `SET lock:{show}:{seat} holdId NX PX 10s` in seat order.
+    3. Release the locks with compare-and-delete **after the transaction completes**.
+    4. Write with `lock_fence < :token`.
+    
+    A missing counter is re-seeded from `max(lock_fence)`.
+  - **(e) Redis Lua:** one script checks every seat's mark (`holdId|expiryMillis` in `seats:{show}`) and sets all marks only if none is live. On a pass it delegates to (c), and removes its marks if the transaction doesn't commit.
+  - **Selection:** `inventory.locking.strategy` (env `LOCKING_STRATEGY`), bound to an enum. An unknown value fails startup.
+- **Why this approach:**
+  - **One contract suite for all five (LSP):** each `*LockingIT` only sets the property, so a strategy that passes is substitutable by definition. Together they run 33 contract tests plus strategy-specific ones.
+  - **Factory method instead of five conditional beans:** exactly one strategy exists at runtime, and the choice is visible in one `switch` and one startup log line.
+  - **Redis locks held until the transaction ends:** releasing them when `claim()` returns would let another client read the row before our write commits. That bug is easy to write and invisible in single-threaded tests.
+  - **Fencing token in Postgres:** this is what makes a Redis lock survivable when it expires mid-flight, as far as it can be. The class Javadoc and the registry name the remaining hole (a stale holder beats a newer one that hasn't written yet), which is why Postgres stays the authority.
+  - **Lua as a decorator:** the filter can only reject more, never accept more. A stale mark causes a false rejection, never an oversell. `RedisLuaLockingIT.liveMarkRejectsWithoutTouchingPostgres` shows exactly this trade-off.
+- **Problems found by the tests (and fixed):**
+  1. **The fencing counter reset bug:** after Redis was cleared, the counter restarted at 1 while Postgres held tokens in the thousands. Every redis-lock claim was then rejected: safe, but a total outage for that show. Fixed by seeding a missing counter from `max(lock_fence)`, with a regression test (`lostFenceCounterIsReseededFromPostgres`).
+  2. **The Lua filter doesn't see database edits:** the expired-seat test edits expiry in SQL. Under (e) it needs a hook that clears the Redis mark, which documents that the cache must be kept in sync. This is the job of P2.3–P2.5.
+- **Alternatives considered:**
+  - **`SERIALIZABLE` isolation as a sixth strategy:** correct, but it moves conflict handling into retries on serialization failures, which overlaps with (b). It can be added to the benchmark if time allows.
+  - **`SKIP LOCKED`/`NOWAIT` variants of (a):** faster rejection, but they refuse seats whose locker later rolls back. Kept as a note for P1.8.
+  - **Redisson for the lock:** a richer client, but it hides the very mechanics (TTL, fencing, release-after-commit) this part is meant to show.
+- **How it was verified:** `mvn clean verify`: BUILD SUCCESS, 129 tests, 0 failures:
+  - **Contract suite:** all 5 strategies pass the 6-test contract.
+  - **redis-lock extras:** locks are gone after the transaction, a stale fencing token is rejected, and a lost counter is re-seeded.
+  - **redis-lua extras:** a failed database claim removes the marks, and a live mark rejects before Postgres.
+  
+  Redis 7 runs in Testcontainers.
+- **ADR:** the choice between them is ADR 003, written in P1.8 from measurements.
