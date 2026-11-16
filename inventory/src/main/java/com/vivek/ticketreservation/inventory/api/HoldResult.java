@@ -5,4 +5,4 @@ import java.util.List;
 import java.util.UUID;
 
 /** Outcome of a successful hold, independent of any transport (HTTP DTOs live in {@code web}). */
-public record HoldResult(UUID holdId, UUID showId, Instant expiresAt, List<String> seatCodes) { }
+public record HoldResult(UUID holdId, UUID showId, Instant expiresAt, List<HeldSeat> seats, long totalMinor, String currency) { }

@@ -20,6 +20,7 @@ public class InventoryController {
     public HoldResponse createHold(@PathVariable UUID showId, @RequestHeader("X-User-Id") UUID userId,
                                    @Valid @RequestBody CreateHoldRequest request) {
         HoldResult result = inventory.hold(new HoldCommand(showId, userId, request.seatCodes()));
-        return new HoldResponse(result.holdId(), result.showId(), "HELD", result.expiresAt(), result.seatCodes());
+        return new HoldResponse(result.holdId(), result.showId(), "HELD", result.expiresAt(),
+                result.seats(), result.totalMinor(), result.currency());
     }
 }

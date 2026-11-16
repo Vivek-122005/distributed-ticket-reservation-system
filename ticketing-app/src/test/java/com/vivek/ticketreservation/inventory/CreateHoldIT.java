@@ -40,7 +40,10 @@ class CreateHoldIT {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).containsEntry("status", "HELD").containsEntry("showId", DEMO_SHOW.toString());
-        assertThat(response.getBody().get("seatCodes")).isEqualTo(List.of("A1", "A2"));
+        assertThat(response.getBody().get("seats")).isEqualTo(List.of(
+                Map.of("seatCode", "A1", "priceMinor", 150000),
+                Map.of("seatCode", "A2", "priceMinor", 150000)));
+        assertThat(response.getBody()).containsEntry("totalMinor", 300000).containsEntry("currency", "INR");
         assertThat(seatStatus(jdbc, "A1")).isEqualTo("HELD");
         assertThat(seatStatus(jdbc, "A2")).isEqualTo("HELD");
     }
@@ -56,6 +59,27 @@ class CreateHoldIT {
         assertThat(seatStatus(jdbc, "A3")).as("all-or-nothing: A3 must not stay held").isEqualTo("AVAILABLE");
         Integer holds = jdbc.queryForObject("SELECT count(*) FROM inventory.holds", Integer.class);
         assertThat(holds).as("the failed hold row is rolled back too").isEqualTo(1);
+    }
+
+    @Test
+    void holdUsesThePriceFrozenOnTheShowSeat() {
+        jdbc.update("UPDATE inventory.show_seats SET price_minor = 99900 WHERE show_id = ? AND seat_code = 'A9'", DEMO_SHOW);
+
+        ResponseEntity<Map> response = hold(UUID.randomUUID(), "A9", "A10");
+
+        assertThat(response.getBody()).containsEntry("totalMinor", 249900);
+        jdbc.update("UPDATE inventory.show_seats SET price_minor = 150000 WHERE show_id = ?", DEMO_SHOW);
+    }
+
+    @Test
+    void claimIsOneStatementForAllSeats() {
+        ResponseEntity<Map> response = hold(UUID.randomUUID(), "A20", "A21", "A22", "A23", "A24", "A25", "A26", "A27");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        Integer held = jdbc.queryForObject(
+                "SELECT count(*) FROM inventory.show_seats WHERE hold_id = ?::uuid AND status = 'HELD'",
+                Integer.class, response.getBody().get("holdId"));
+        assertThat(held).isEqualTo(8);
     }
 
     @Test

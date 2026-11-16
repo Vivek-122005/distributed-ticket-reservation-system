@@ -12,8 +12,8 @@ info:
     extracted into `inventory-service` (P7.8). Catalog reads and the seat map are public.
 
     **Implementation status** is marked per operation with `x-plan-part` (see docs/PROJECT_PLAN.md).
-    Today hold creation exists at `POST /shows/{showId}/holds` (V2 show-based schema, P1.0); its
-    response still returns `seatCodes` only, and per-seat prices + total arrive with P1.1.
+    Today hold creation exists at `POST /shows/{showId}/holds` (P1.0 + P1.1) with the full
+    `Hold` response (per-seat prices, total, currency).
 
     **Idempotency:** confirm and release are naturally idempotent (repeating them returns the same
     result). Hold creation is protected upstream by the booking API's `Idempotency-Key`.
@@ -102,7 +102,7 @@ paths:
         All-or-nothing: either every requested seat moves to `HELD` for this hold, or none do.
         Seats are claimed with a conditional update (compare-and-set) in one transaction, in sorted
         order to prevent deadlocks. The hold expires automatically after 5 minutes.
-      x-plan-part: P1.0 + P1.1 (P1.0 implemented; priced response shape in P1.1)
+      x-plan-part: P1.0 + P1.1 (implemented)
       parameters:
         - $ref: '#/components/parameters/ShowId'
         - $ref: '#/components/parameters/UserId'

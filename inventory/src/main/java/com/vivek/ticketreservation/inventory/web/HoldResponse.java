@@ -1,7 +1,11 @@
 package com.vivek.ticketreservation.inventory.web;
 
+import com.vivek.ticketreservation.inventory.api.HeldSeat;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-public record HoldResponse(UUID holdId, UUID showId, String status, Instant expiresAt, List<String> seatCodes) { }
+/** HTTP shape of a hold, schema {@code Hold} in docs/api/inventory-service.yaml. */
+public record HoldResponse(UUID holdId, UUID showId, String status, Instant expiresAt,
+                           List<HeldSeat> seats, long totalMinor, String currency) { }

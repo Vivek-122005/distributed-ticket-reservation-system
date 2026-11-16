@@ -258,3 +258,22 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Upgrade path:** the packaged jar ran against the existing Compose database, which already had V1 and a leftover held seat from earlier. Flyway applied only V2.
   - **Smoke test:** A99+A100 → 201; A100 again → 409 `SEAT_UNAVAILABLE`; random show → 404 `SHOW_NOT_FOUND`.
 - **ADR:** none
+
+### P1.1 — Batched atomic multi-seat claim
+- **Date:** 2026-11-16
+- **Module / files:** `inventory.infrastructure.JdbcSeatClaimRepository` (new; replaces `ShowSeatRepository`/`ShowSeatRow`), `CreateHoldUseCase`, `api.HeldSeat`, `HoldResult`, `web.HoldResponse`, `ShowRow` (currency), `CreateHoldIT`; plan, API spec, pattern and SOLID registries
+- **What was built:**
+  - **One statement per hold:** all requested seats are claimed in one SQL statement. A CTE selects the still-`AVAILABLE` rows with `ORDER BY seat_code FOR UPDATE`, and an `UPDATE … FROM target … RETURNING seat_code, price_minor` marks them `HELD`.
+  - **All-or-nothing:** the use case compares the number of returned rows with the number requested. On a mismatch it throws `SeatUnavailableException`, and the transaction rollback undoes the partial claim and the hold row.
+  - **Priced response:** the hold response now matches the contract's `Hold` schema: `seats[{seatCode, priceMinor}]`, `totalMinor` and `currency` (from the show).
+- **Why this approach:**
+  - **One round trip instead of up to 8:** the hold transaction is the hottest path in the system. Fewer round trips means shorter transactions, and so shorter lock hold times on contended rows.
+  - **Lock order in SQL:** `ORDER BY … FOR UPDATE` makes Postgres lock rows in a single global order. Two overlapping requests (A1+A2 vs A2+A1) queue instead of deadlocking. Before, the guarantee depended on Java sorting before N separate statements. A bare `UPDATE … WHERE seat_code = ANY(?)` would lock in whatever order the plan scans, which is not guaranteed.
+  - **Correct under READ COMMITTED:** when a transaction waits on a locked row, Postgres re-evaluates the `WHERE` against the committed version (EvalPlanQual). A seat that was taken meanwhile drops out of the result instead of being double-claimed.
+  - **JDBC instead of Spring Data:** `@Modifying` queries return only an update count. `RETURNING` gives the claimed seats and their prices in the same round trip. This was foreseen as an option in the Repository pattern entry.
+- **Alternatives considered:**
+  - **Keeping the per-seat loop:** correct, but N statements and N round trips.
+  - **`FOR UPDATE SKIP LOCKED` or `NOWAIT`:** these reject faster under contention, but would wrongly refuse a seat whose current locker later rolls back. Recorded as a variant to measure in the P1.8 benchmark.
+  - **`SERIALIZABLE` isolation:** also correct, but adds serialization-failure retries for no gain over a single compare-and-set statement.
+- **How it was verified:** `mvn verify`: BUILD SUCCESS, 10 surefire + 13 failsafe tests. New ITs: a priced response (2 × 150000 = 300000 INR); a per-seat frozen price is used (99900 + 150000); an 8-seat hold claims exactly 8 rows with one hold id. The existing conflict test still proves nothing is left held after a partial overlap. The deadlock-freedom claim is tested under real contention in P1.6.
+- **ADR:** none (the strategy comparison is ADR 003 in P1.8)

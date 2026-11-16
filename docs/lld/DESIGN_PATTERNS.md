@@ -16,8 +16,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | # | Pattern | Category | Status | Where (main class) |
 |---|---|---|---|---|
 | 1 | [Ports & Adapters (Hexagonal)](#1-ports--adapters-hexagonal) | Architectural | 🔨 | all modules |
-| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldRepository`, `ShowSeatRepository`, `ShowRepository` |
-| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `ShowSeatRepository.claimAvailableSeat` |
+| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldRepository`, `ShowRepository`, `JdbcSeatClaimRepository` |
+| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `JdbcSeatClaimRepository.claimAvailable` |
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
 | 6 | [State](#6-state) | Behavioural (GoF) | ⬜ P1.3, P3.2, P4.2 | `ShowSeat`, `Hold`, `Booking`, `Payment` |
@@ -53,11 +53,20 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** a hand-written DAO with `JdbcTemplate`. That gives more control but more boilerplate. It is still available for the hot claim query if JPA overhead shows up in P9.5.
 
 ## 3. Compare-and-Set (conditional update)
-- **Status:** ✅ (single seat per statement; batched form in P1.1, lazy expiry in P1.2)
-- **Where:** `ShowSeatRepository.claimAvailableSeat`: `UPDATE inventory.show_seats SET status='HELD' … WHERE show_id=? AND seat_code=? AND status='AVAILABLE'`; called by `inventory.application.CreateHoldUseCase.execute`.
-- **Problem:** thousands of concurrent requests for the same seat; exactly one may win.
-- **Why:** Postgres re-checks the `WHERE` under the row lock, so the update is an atomic check-and-set. Losers see `0 rows` immediately. All seats are claimed in one transaction, in sorted order: all-or-nothing, and no deadlocks.
-- **Alternative:** `SELECT … FOR UPDATE` then `UPDATE` (pessimistic) holds locks longer; an optimistic `version` check retries a lot under contention. Both are benchmarked in P1.7–P1.8.
+- **Status:** ✅ batched in P1.1 (lazy expiry in P1.2)
+- **Where:** `inventory.infrastructure.JdbcSeatClaimRepository.claimAvailable`, called by `inventory.application.CreateHoldUseCase.execute`:
+  `WITH target AS (SELECT id … WHERE show_id=? AND seat_code = ANY(?) AND status='AVAILABLE' ORDER BY seat_code FOR UPDATE) UPDATE … FROM target … RETURNING seat_code, price_minor`.
+- **Problem:** thousands of concurrent requests for the same seat; exactly one may win, and a multi-seat request must get all of its seats or none.
+- **Why:**
+  - **Atomic check-and-set:** under READ COMMITTED, Postgres re-checks the `WHERE` on the newest row version after waiting for a lock, so a seat claimed meanwhile is simply not returned.
+  - **All-or-nothing:** the use case compares the number of claimed rows with the number requested and throws on a mismatch. The transaction rollback undoes the partial claim and the hold row.
+  - **No deadlocks:** `ORDER BY … FOR UPDATE` locks rows in one global order, so two overlapping requests can't each wait for the other.
+  - **One round trip:** the claim and the prices come back in one statement instead of N.
+- **Alternative:**
+  - **One `UPDATE` per seat (the P0 version):** correct, but N round trips, with lock order depending on Java sorting.
+  - **A bare `UPDATE … WHERE seat_code = ANY(?)` without the ordered CTE:** lock order then follows the plan's scan order, which isn't guaranteed.
+  - **`NOWAIT` / `SKIP LOCKED`:** faster rejection, but a seat locked by a transaction that later rolls back would be refused wrongly. Kept for the benchmark.
+  - **Pessimistic and optimistic strategies:** benchmarked in P1.7–P1.8.
 
 ## 4. Data Transfer Object
 - **Status:** ✅

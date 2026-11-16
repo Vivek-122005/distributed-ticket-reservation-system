@@ -17,7 +17,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `inventory.application.InventoryFacade` | Only delegation from the module API to use cases | ✅ P0.14 |
 | `inventory.application.CreateHoldUseCase` | Only the hold use case (renamed from `InventoryApplicationService`) | ✅ P0.14 |
 | `ApiExceptionHandler` | Only exception → error-response mapping | ✅ |
-| `ShowSeatRepository` | Only show-seat persistence and the claim query | ✅ |
+| `JdbcSeatClaimRepository` | Only the hot seat-claim statement | ✅ P1.1 |
 | Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService` | ⬜ P1.3–P1.4, P2.1 |
 | `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
 | `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
