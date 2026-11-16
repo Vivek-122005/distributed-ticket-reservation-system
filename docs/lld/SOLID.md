@@ -1,0 +1,83 @@
+# SOLID registry
+
+How each SOLID principle is applied in this codebase: **where**, **how**, and **what would happen without it**. It also lists where the current code does **not** follow a principle yet, and which plan part fixes that. An honest list of known gaps is more useful in a review than a claim of perfection.
+
+**Rule** (plan §12, rule 6): a change that makes a notable SOLID decision, or fixes a deviation listed below, updates this file in the same commit.
+
+Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
+
+---
+
+## S: Single Responsibility Principle
+*A class has one reason to change.*
+
+| Where | How it is applied | Status |
+|---|---|---|
+| `InventoryController` | Only HTTP concerns: path and header binding, validation trigger, status code | ✅ |
+| `ApiExceptionHandler` | Only exception → error-response mapping | ✅ |
+| `SeatInventoryRepository` | Only seat persistence and the claim query | ✅ |
+| Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService` | ⬜ P1.3–P1.4, P2.1 |
+| `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
+| `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
+
+**Without it:** one "BookingService" class doing HTTP, rules, retries and SQL. Every change risks breaking an unrelated path, and the concurrency logic can't be tested on its own.
+
+## O: Open/Closed Principle
+*Open for extension, closed for modification.*
+
+| Where | How it is applied | Status |
+|---|---|---|
+| `SeatLockingStrategy` | A new locking approach is a new class plus a config value; the hold use case does not change | ⬜ P1.7 |
+| `PaymentGateway` | Adding Stripe next to Razorpay is a new adapter, not an edit to payment logic | ⬜ P4.1 |
+| `IdempotentEventConsumer` | A new consumer extends the base; dedup and retry code stays untouched | ⬜ P5.5 |
+| Kafka pub/sub | A new side effect (for example SMS) is a new consumer group; producers are unchanged | ⬜ P5 |
+
+**Without it:** `switch (strategy)` blocks inside use cases, so every new option edits tested code.
+
+## L: Liskov Substitution Principle
+*Any implementation can replace its interface without surprising the caller.*
+
+| Where | How it is applied | Status |
+|---|---|---|
+| All `SeatLockingStrategy` implementations | One shared contract test suite (exactly-N winners, no partial holds) runs against **every** strategy | ⬜ P1.6–P1.7 |
+| `MockPaymentGateway` / `SandboxPaymentGateway` | Same contract tests: idempotent `capture`; `fetchStatus` returns the same outcome as the original call; timeouts surface as `GatewayTimeout`, never as a fake failure | ⬜ P4.1 |
+| `InProcessInventoryAdapter` / `HttpInventoryAdapter` | Same results and error codes (`SEAT_UNAVAILABLE`, `HOLD_EXPIRED`), so extraction does not change booking behaviour | ⬜ P7.8 |
+
+**Without it:** the mock behaves "nicer" than the real gateway, tests pass, and production breaks. Contract tests are how LSP is enforced, not just claimed.
+
+## I: Interface Segregation Principle
+*Clients depend only on the methods they use.*
+
+| Where | How it is applied | Status |
+|---|---|---|
+| `InventoryApi` (booking's view) vs `CatalogAdminApi` (admin) | Booking sees `hold / confirm / release` only; venue and show creation is a separate interface | ⬜ P0.14, P6.9 |
+| `PaymentApi` vs `PaymentGateway` | Booking uses `PaymentApi` (create intent, refund); only the payment module sees the PSP-level `PaymentGateway` | ⬜ P4.1 |
+| Read vs write ports (`SeatMapQuery` vs `HoldCommands`) | The seat-map read path can move to Redis or a replica without touching the write path | ⬜ P1.5, P2.3 |
+
+**Without it:** one fat `InventoryService` interface. Every consumer recompiles for unrelated changes, and extraction has to expose everything.
+
+## D: Dependency Inversion Principle
+*High-level policy depends on abstractions; details depend on them too.*
+
+| Where | How it is applied | Status |
+|---|---|---|
+| Use cases → outbound ports | Use cases depend on `HoldStore` / `SeatLockingStrategy` interfaces in the application layer; JPA/Redis classes implement them in `infrastructure` | ⬜ P1.3, P1.7 |
+| Booking → `InventoryApi` | Booking depends on the interface; Spring wires the in-process or HTTP adapter | ⬜ P3.3 |
+| Domain → nothing | Domain classes import no Spring, JPA or Jackson; enforced by an ArchUnit rule | ⬜ P0.14 |
+
+**Without it:** business code imports JPA and HTTP clients directly, so it can't be unit-tested, can't swap strategies and can't be extracted.
+
+---
+
+## Known deviations (to fix)
+
+Found by reviewing the bootstrap code (`inventory-service`, commit `37138c8`) against the rules above:
+
+| # | Deviation | Principle | Fixed in |
+|---|---|---|---|
+| 1 | `InventoryApplicationService` returns `api.HoldResponse`, so the application layer depends on the inbound adapter | DIP | P1.3: return a domain/application result; the controller maps it to the DTO |
+| 2 | `InventoryApplicationService` uses Spring Data repositories from `infrastructure` directly, with no port interface | DIP | P1.3: introduce `HoldStore` / `SeatClaimPort`, implemented by JPA adapters |
+| 3 | `domain.Hold` carries JPA annotations, so the domain depends on persistence | DIP | P1.3: separate the persistence entity from the domain model, or document the pragmatic exception in an ADR |
+| 4 | One service class will grow to hold, confirm and release | SRP | P1.4: one use-case class per operation |
+| 5 | Stored `HoldStatus.ACTIVE` vs API `HELD`: two names for one state | (consistency) | P1.3 |
+| 6 | No ArchUnit rules yet, so the boundaries are convention only | — | P0.14 |

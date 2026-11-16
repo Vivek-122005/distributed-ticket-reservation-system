@@ -108,3 +108,23 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Spring Modulith for module boundaries:** see ADR 002.
 - **How it was verified:** all 18 Mermaid diagrams (plan + HLD) parse with Mermaid 11.4.1. Cross-references were checked by grep (no remaining `seat_inventory` or `eventId:section` in the target design, and ADR numbers are consistent). This is a design change only; no code was changed.
 - **ADR:** [002](adr/002-modular-monolith-first.md)
+
+### P0.10 — LLD registries: design patterns and SOLID
+- **Date:** 2026-11-16
+- **Module / files:** `docs/lld/DESIGN_PATTERNS.md`, `docs/lld/SOLID.md`, plan §5 and §12 (rule 6)
+- **What was built:**
+  - **Design patterns registry:** 20 patterns, each with status (implemented, partly implemented or planned), the exact class and file, the problem it solves there, why it was chosen, and the rejected alternative.
+  - **SOLID registry:** where each principle is applied and what it prevents, plus a list of the **known deviations** in the current bootstrap code, each linked to the part that fixes it.
+  - **Working rule:** a change that introduces a pattern updates the registry in the same commit, and the class gets a Javadoc pointer to its entry.
+- **Why this approach:**
+  - **Answers in one place:** the project is judged on LLD, so "where exactly is the Strategy pattern and why?" should have a one-click answer.
+  - **Planned vs implemented:** listing each pattern with its real status keeps the document honest, so nothing is claimed before it exists.
+  - **Deviations first:** recording the gaps in the bootstrap code first (for example, the application layer returns an API DTO, which breaks DIP) turns them into tracked fixes instead of surprises in a review.
+  - **LSP via contract tests:** substitutability is enforced by one shared test suite per interface, not just asserted.
+- **Alternatives considered:**
+  - **Pattern notes only in the final LLD document (P12.2):** they would be written from memory at the end and drift from the code.
+  - **Javadoc only:** this can't be browsed as a whole or reviewed in one place. Javadoc is kept, as pointers.
+  - **Generated diagrams only (e.g. PlantUML from code):** these show structure but not *why*. Class diagrams come in P0.13.
+- **How it was verified:** each ✅ entry was checked against the actual source files in `inventory-service`. The deviations list comes from reading every class in that module.
+- **ADR:** none
+
