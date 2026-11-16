@@ -68,15 +68,15 @@ class SeatCacheReconcilerIT {
                 hold, DEMO_SHOW, UUID.randomUUID());
         jdbc.update("UPDATE inventory.show_seats SET status = 'BOOKED', hold_id = ?, held_by_user_id = ?, hold_expires_at = now(), version = version + 1 "
                 + "WHERE show_id = ? AND seat_code = 'A2'", hold, UUID.randomUUID(), DEMO_SHOW);
-        redis.opsForHash().put(key, "A3", "0|B|0");                                       // diverged: same version, wrong state
+        redis.opsForHash().put(key, "A3", version("A3") + "|B|0");                        // diverged: same version, wrong state
         double before = registry.counter("inventory.drift", "kind", "stale").count();
 
         SeatCacheReconciler.Report report = reconciler.reconcile(DEMO_SHOW);
 
         assertThat(report.repaired()).containsEntry(Drift.MISSING, 1).containsEntry(Drift.STALE, 1).containsEntry(Drift.DIVERGED, 1);
-        assertThat(redis.opsForHash().get(key, "A1")).isEqualTo("0|A|0");
-        assertThat((String) redis.opsForHash().get(key, "A2")).startsWith("1|B|");
-        assertThat(redis.opsForHash().get(key, "A3")).isEqualTo("0|A|0");
+        assertThat(redis.opsForHash().get(key, "A1")).isEqualTo(version("A1") + "|A|0");
+        assertThat((String) redis.opsForHash().get(key, "A2")).startsWith(version("A2") + "|B|");
+        assertThat(redis.opsForHash().get(key, "A3")).isEqualTo(version("A3") + "|A|0");
         assertThat(registry.counter("inventory.drift", "kind", "stale").count()).isEqualTo(before + 1);
         assertThat(reconciler.reconcile(DEMO_SHOW).total()).as("idempotent").isZero();
     }
@@ -84,20 +84,25 @@ class SeatCacheReconcilerIT {
     @Test
     void inFlightWorkIsNotTreatedAsDrift() {
         String key = SeatStateCache.key(DEMO_SHOW);
-        redis.opsForHash().put(key, "A4", "0|P|" + Instant.now().plusSeconds(2).toEpochMilli() + "|token");   // fresh pending mark
-        cache.apply(DEMO_SHOW, List.of(new CachedSeat("A5", SeatStatus.HELD, Instant.now().plusSeconds(300), 9)));   // cache ahead
+        redis.opsForHash().put(key, "A4", version("A4") + "|P|" + Instant.now().plusSeconds(2).toEpochMilli() + "|token");   // fresh pending mark
+        cache.apply(DEMO_SHOW, List.of(new CachedSeat("A5", SeatStatus.HELD, Instant.now().plusSeconds(300), version("A5") + 9)));   // cache ahead
 
         assertThat(reconciler.reconcile(DEMO_SHOW).total()).isZero();
         assertThat((String) redis.opsForHash().get(key, "A4")).contains("|P|");
-        assertThat((String) redis.opsForHash().get(key, "A5")).startsWith("9|H|");
+        assertThat((String) redis.opsForHash().get(key, "A5")).startsWith((version("A5") + 9) + "|H|");
     }
 
     @Test
     void abandonedPendingMarkIsCleanedUp() {
         String key = SeatStateCache.key(DEMO_SHOW);
-        redis.opsForHash().put(key, "A6", "0|P|" + Instant.now().minusSeconds(10).toEpochMilli() + "|dead");
+        redis.opsForHash().put(key, "A6", version("A6") + "|P|" + Instant.now().minusSeconds(10).toEpochMilli() + "|dead");
 
         assertThat(reconciler.reconcile(DEMO_SHOW).repaired()).containsEntry(Drift.DIVERGED, 1);
-        assertThat(redis.opsForHash().get(key, "A6")).isEqualTo("0|A|0");
+        assertThat(redis.opsForHash().get(key, "A6")).isEqualTo(version("A6") + "|A|0");
+    }
+
+    /** Row versions survive the per-test reset (they only grow), so expectations use the real value. */
+    private long version(String seat) {
+        return jdbc.queryForObject("SELECT version FROM inventory.show_seats WHERE show_id = ? AND seat_code = ?", Long.class, DEMO_SHOW, seat);
     }
 }

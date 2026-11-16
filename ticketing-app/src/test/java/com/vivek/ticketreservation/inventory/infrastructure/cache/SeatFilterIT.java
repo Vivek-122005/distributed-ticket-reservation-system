@@ -64,7 +64,7 @@ class SeatFilterIT {
 
         assertThat(verdict("REJECTED")).isEqualTo(rejectedBefore + 1);
         assertThat(count("SELECT count(*) FROM inventory.holds")).as("no transaction was even started").isEqualTo(holdsBefore);
-        assertThat(cached("A2")).as("nothing marked for a rejected request").startsWith("0|A|");
+        assertThat(cached("A2")).as("nothing marked for a rejected request").matches("\\d+\\|A\\|0");
     }
 
     @Test
@@ -92,7 +92,7 @@ class SeatFilterIT {
 
         assertThatThrownBy(() -> hold("A10", "A11")).isInstanceOf(SeatUnavailableException.class);
 
-        assertThat(cached("A11")).as("our pending mark is gone, A11 is free again").startsWith("0|A|0");
+        assertThat(cached("A11")).as("our pending mark is gone, A11 is free again").matches("\\d+\\|A\\|0");
         assertThat(hold("A11")).isNotNull();
     }
 
@@ -101,7 +101,8 @@ class SeatFilterIT {
         warm();
         hold("A20");
         settle();
-        assertThat(cached("A20")).as("committed SeatsChanged (higher version) replaced the pending mark").startsWith("1|H|");
+        assertThat(cached("A20")).as("committed SeatsChanged (higher version) replaced the pending mark")
+                .startsWith(jdbc.queryForObject("SELECT version FROM inventory.show_seats WHERE show_id = ? AND seat_code = 'A20'", Long.class, DEMO_SHOW) + "|H|");
     }
 
     @Test

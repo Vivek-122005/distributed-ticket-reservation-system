@@ -831,3 +831,17 @@ A running record of **what was built, in which phase, in which part of the syste
 - **Seat-map reads:** served from a versioned Redis cache, which reconciliation keeps honest.
 - **Fast path:** most flash-sale losers are rejected in Redis before Postgres.
 - **Redis outage:** losing Redis costs only speed, never correctness or availability.
+
+### P2.5 fix — order-dependent cache tests (CI failure on 716ed8a)
+- **Date:** 2026-11-16
+- **Files:** `SeatCacheReconcilerIT`, `SeatFilterIT`
+- **What happened:**
+  - **The failure:** GitHub CI failed on the P2.5 commit with `STALE=2 (expected: 1)`. It passed locally and on the next commit.
+  - **Why the version mattered:** `SeatCacheReconcilerIT` shares its Spring context, and therefore its database, with `SeatCacheIT`. Row versions only ever grow; the per-test reset puts seats back to `AVAILABLE` but deliberately doesn't rewind `version`, since that would break the very ordering guarantee the cache relies on.
+  - **Why CI saw it:** CI ran `SeatCacheIT` first, which had held and expired seat A3 (version 2). The "diverged" case then wrote A3 with a hard-coded version `0`. That is *older* than Postgres, so the reconciler correctly counted it as STALE, not DIVERGED.
+- **Fix:**
+  - **Real versions:** the tests now build their cache values from the real row version (`version(seat)`) instead of assuming 0.
+  - **`SeatFilterIT`:** it had the same latent assumption, and now matches `\d+|A|0`.
+  - **Reproduced first:** CI's order was reproduced locally with `-Dit.test=SeatCacheIT,SeatCacheReconcilerIT -Dfailsafe.runOrder=alphabetical` before and after the fix.
+- **Lesson:** tests that share a context share data, so assert on *relationships* (same or older version) rather than literal values a previous test may have moved. The production code was right; the test encoded an assumption.
+- **How it was verified:** `mvn verify` passes, 154 tests and 1 skipped. The forced CI order passes.
