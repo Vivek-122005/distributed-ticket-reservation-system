@@ -41,6 +41,7 @@
 | Duplicate Kafka message | Consumer sees event twice | — | Second one skipped | `processed_events` dedup | P10.5 |
 | Webhook duplicated / out of order | Same payment result twice, or `Failed` after `Captured` | — | Ignored by state machine | Transitions validated against current state | P10.6 |
 | Payment captured after hold expiry | Customer paid, seat may be resold | Booking in `EXPIRED` receives capture | Automatic refund | Late-payment path (flow 3.6) | P10.6 |
+| Gateway timeout during capture *(rev)* | Outcome unknown: maybe charged, maybe not | Gateway call times out | Payment → `UNKNOWN`; reconciliation asks the gateway by idempotency key | Seats are neither released nor booked on a guess; a late capture goes to refund | P10.7 |
 | Crash between capture and confirm | Paid but seats still `HELD` | Saga stuck past `next_retry_at` | Recovery job / webhook retry resumes | Idempotent confirm; expiry → refund path | P10.8 |
 | Slow inventory (latency spike) | Booking threads pile up | p99 metric, circuit breaker | Breaker opens → fast `503`; waiting room lowers admission rate | Fails fast instead of cascading | P10.7 |
 | Expiry worker stopped | Expired holds not cleaned up | Hold-age metric | Restart | Lazy expiry in claim `WHERE` makes expired seats claimable anyway | P1.2 |
@@ -51,10 +52,11 @@
 
 | # | Invariant | Enforced by | Verified by |
 |---|---|---|---|
-| 1 | ≤ 1 active hold/booking per seat | Row-level compare-and-set; `UNIQUE (event_id, seat_code)` | Concurrency tests (P1.6); post-load SQL (P9.2) |
+| 1 | ≤ 1 active hold/booking per show seat | Row-level compare-and-set; `UNIQUE (show_id, seat_id)` | Concurrency tests (P1.6); post-load SQL (P9.2) |
 | 2 | Booked seats = seats of confirmed bookings | Confirm only via saga | Post-load reconciliation SQL across schemas (P9.2) |
 | 3 | Captured payment ⇒ confirmed booking or refund | Saga + late-payment path | Post-load SQL; chaos tests (P10.6, P10.8) |
 | 4 | Every `HELD` seat has an expiry | `CHECK` constraint | Constraint itself; tests |
+| 5 | No payment `UNKNOWN` past the reconciliation window *(rev)* | Reconciliation job (P4.8) | `payments_unknown` metric + alert; chaos test P10.7 |
 
 The post-load checker (P9.2) fails the run if any invariant is violated, so "0 oversold" in the demo is a computed result, not a claim.
 
@@ -65,6 +67,8 @@ The post-load checker (P9.2) fails the run if any invariant is violated, so "0 o
 | Booking → Inventory hold | 500 ms | 0 (not retried automatically; idempotency key lets the client retry safely) | — | 50 % failures over 20 calls → open 5 s |
 | Booking → Inventory confirm/release | 1 s | 5 | Exponential 100 ms → 5 s + jitter | Yes |
 | Booking → Payment create intent | 2 s | 2 | Exponential + jitter | Yes |
+| Payment → PSP capture *(rev)* | 5 s | 0 (a timeout becomes `UNKNOWN`) | — | Yes |
+| Reconciliation lookup *(rev)* | 5 s | every minute until resolved | Fixed 1 min | — |
 | Saga recovery | — | until hold expiry, then compensation | Exponential up to 1 min | — |
 | Kafka consumer | — | in-place 3, then retry topics 1 m, 5 m, then DLQ | Fixed per stage | — |
 

@@ -12,4 +12,4 @@ This folder holds the system's high-level design. [`../PROJECT_PLAN.md`](../PROJ
 
 Diagrams use [Mermaid](https://mermaid.js.org/), which GitHub renders natively.
 
-**Status:** the design describes the *target* system. Parts not yet implemented are tagged with the plan part that builds them (e.g. `P4.4`).
+**Status:** the design describes the *target* system. The core is built as a modular monolith first and extracted later ([ADR 002](../adr/002-modular-monolith-first.md)); see §1.2b of the architecture. Parts not yet implemented are tagged with the plan part that builds them (e.g. `P4.4`).

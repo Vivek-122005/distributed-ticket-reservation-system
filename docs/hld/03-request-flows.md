@@ -1,6 +1,6 @@
 # 3. Request flows
 
-Each flow lists the steps, the guarantee it provides, and what happens on failure. Plan part tags show where it is built.
+Each flow lists the steps, the guarantee it provides, and what happens on failure. Plan part tags show where it is built. In stage 1 (ADR 002) arrows between Booking, Inventory and Payment are in-process port calls; in stage 2 the same arrows become HTTP calls.
 
 ---
 
@@ -12,24 +12,24 @@ sequenceDiagram
     participant G as Gateway
     participant W as Waiting Room
     participant R as Redis
-    U->>G: POST /events/{id}/queue
-    G->>W: enqueue(userId, eventId)
-    W->>R: ZADD NX queue:{eventId} <arrivalTs> userId
+    U->>G: POST /shows/{id}/queue
+    G->>W: enqueue(userId, showId)
+    W->>R: ZADD NX queue:{showId} <arrivalTs> userId
     W-->>U: position, ETA
     loop every 5 s
-      U->>G: GET /events/{id}/queue/status
+      U->>G: GET /shows/{id}/queue/status
       G->>W: status
-      W->>R: ZRANK / admitted:{eventId}:{userId}?
+      W->>R: ZRANK / admitted:{showId}:{userId}?
       W-->>U: position (or admission token)
     end
     Note over W,R: Admission worker, every 1 s
-    W->>R: free = cap − SCARD active:{eventId}
-    W->>R: ZPOPMIN queue:{eventId} free
-    W->>R: SADD active:{eventId} users, store token (TTL 10 min)
+    W->>R: free = cap − SCARD active:{showId}
+    W->>R: ZPOPMIN queue:{showId} free
+    W->>R: SADD active:{showId} users, store token (TTL 10 min)
 ```
 
 - **Guarantee:** FIFO by arrival time; one entry per user (`ZADD NX`); never more than `cap` active sessions.
-- **Admission token:** HMAC-signed `{userId, eventId, exp}`; the gateway verifies it **statelessly** on every booking call — no Redis lookup on the hot path.
+- **Admission token:** HMAC-signed `{userId, showId, exp}`; the gateway verifies it **statelessly** on every booking call — no Redis lookup on the hot path.
 - **Failure:** Redis down → waiting room returns `503 Retry-After`; booking path stays closed for that event rather than letting the full crowd through (fail closed protects correctness and the DB).
 
 ---
@@ -42,14 +42,14 @@ sequenceDiagram
     participant I as Inventory
     participant R as Redis
     participant P as Postgres
-    B->>I: POST /events/{e}/holds {seats:[A1,A2]}
+    B->>I: hold(showId s, seats [A1,A2]) via InventoryApi
     I->>R: Lua: all seats free in cache? mark PENDING
     alt any seat taken in cache
       I-->>B: 409 SEAT_UNAVAILABLE (fast reject, ~1 ms)
     else
       I->>P: BEGIN
       I->>P: INSERT hold (HELD, expires_at = now()+5m)
-      I->>P: UPDATE seat_inventory SET status='HELD', hold_id=…<br/>WHERE event_id=e AND seat_code = ANY(sorted seats)<br/>AND (status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now()))
+      I->>P: UPDATE show_seats SET status='HELD', hold_id=…<br/>WHERE show_id=s AND seat_code = ANY(sorted seats)<br/>AND (status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now()))
       alt rows updated == seats requested
         I->>P: INSERT outbox(SeatsHeld) then COMMIT
         I->>R: mark HELD
@@ -191,3 +191,42 @@ sequenceDiagram
 ```
 
 - Crash after send but before `UPDATE` → events re-sent on next poll → **duplicates are possible, loss is not.** Consumers dedupe by `eventId`.
+
+---
+
+## 3.11 Payment outcome unknown: gateway timeout and reconciliation (P4.8) *(rev)*
+
+```mermaid
+sequenceDiagram
+    participant B as Booking
+    participant PS as Payment
+    participant GW as PSP (mock / sandbox)
+    participant RJ as Reconciliation job
+    B->>PS: capture(bookingId)
+    PS->>GW: charge (idempotency key = bookingId)
+    GW--xPS: timeout, no answer
+    PS->>PS: payment PROCESSING → UNKNOWN
+    PS-->>B: outcome UNKNOWN (booking stays PENDING_PAYMENT, seats stay HELD)
+    loop every 1 min
+      RJ->>PS: payments UNKNOWN, or PROCESSING older than 2 min
+      RJ->>GW: fetch status by idempotency key / order id
+      alt charge found
+        RJ->>PS: UNKNOWN → CAPTURED + outbox(PaymentCaptured)
+      else no charge
+        RJ->>PS: UNKNOWN → FAILED + outbox(PaymentFailed)
+      end
+    end
+    PS--)B: PaymentCaptured or PaymentFailed → saga continues (3.3 / 3.4 / 3.6)
+```
+
+- **Why not treat a timeout as failure?** The charge may have succeeded. Releasing the seats would then leave a customer who paid with no ticket. Retrying the charge is only safe because it carries the same idempotency key. Asking the gateway is the authoritative answer.
+- **If the hold expired while the payment was `UNKNOWN`:** a later `CAPTURED` simply follows the late-payment refund path (3.6). Invariant 3 holds without extending holds.
+- **Guarantee:** no payment stays `UNKNOWN` past the reconciliation window (default 15 min). After that, an alert fires for manual review (invariant 5).
+
+---
+
+## 3.12 User cancels a pending booking (P3.7) *(rev)*
+
+1. `POST /bookings/{id}/cancel`. Allowed only in `PENDING_PAYMENT`; repeating it returns the same result.
+2. Booking → `CANCELLED`; the saga runs the compensations: release the hold (`DELETE /holds/{id}`) and cancel the payment intent.
+3. If a capture still arrives afterwards (the user paid in another tab), the booking goes `CANCELLED → REFUND_PENDING → REFUNDED`. This is the same path as a late payment.

@@ -36,7 +36,7 @@ Without a waiting room, 100,000 users × ~3 attempts ≈ 300,000 hold attempts i
 
 | Data | Size per row | Rows | Total |
 |---|---|---|---|
-| `seat_inventory` | ~200 B | 50,000 | ~10 MB |
+| `show_seats` | ~200 B | 50,000 per show | ~10 MB |
 | `holds` | ~150 B | ~100,000 (incl. expired) | ~15 MB |
 | `bookings` | ~250 B | ~25,000 | ~6 MB |
 | `idempotency_keys` (24 h TTL) | ~1 KB (stored response) | ~200,000 | ~200 MB |
@@ -69,7 +69,7 @@ Redis runs with `maxmemory-policy noeviction` (already set in Compose): evicting
 | Topic | Peak rate | Partitions | Reason |
 |---|---|---|---|
 | `booking.events` | ~150/s | 6 | Allows up to 6 parallel consumers per group; plenty of headroom |
-| `inventory.events` | ~3,000/s at burst (hold/release) | 12 | Keyed by `eventId:section` → 25 sections spread across 12 partitions |
+| `inventory.events` | ~3,000/s at burst (hold/release) | 12 | Keyed by `showId:section` → 25 sections spread across 12 partitions |
 | `payment.events` | ~30/s | 6 | Same key as bookings (`bookingId`) |
 
 Partition count is chosen for **consumer parallelism and key spread**, not throughput; a single partition handles far more than these rates.

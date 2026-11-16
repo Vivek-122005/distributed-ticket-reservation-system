@@ -37,10 +37,13 @@ This is **not** "a ticket booking app". It is a **high-concurrency inventory and
 | Event-driven workflow (Outbox + Kafka) | Very high | Decoupling and the dual-write problem |
 | Failure recovery & chaos testing | Very high | Proves reliability, not just happy path |
 | Observability | High | Makes behaviour visible in the demo |
-| Auth, event management, search | Low | Minimal, just enough to function |
+| Auth, admin APIs, booking history | Low | Thin: registration/login with roles, admin CRUD for venues/events/shows, a user's booking list |
+| Live seat updates (WebSocket) | Low | Nice for the demo; never on the correctness path |
 | Frontend | Low | A thin seat-map page at most; the demo is a load test + Grafana |
 
-**Explicitly out of scope:** coupons, reviews, food ordering, posters, user profiles, admin dashboards, real payment gateways, fancy UI.
+**Explicitly out of scope:** coupons, reviews, food ordering, posters, rich user profiles, admin dashboards (UI), live-mode payments, fancy UI. A payment gateway **sandbox (test mode)** is in scope (P4.1).
+
+**Plan revision (2026-11-16):** after comparing this plan with the TicketFlow blueprint, both partners agreed to adopt its Show/Venue domain model, its payment `UNKNOWN` state with reconciliation, a sandbox gateway, the thin user/admin features and early SRS/UML documents. The core is built **modular-monolith first** ([ADR 002](adr/002-modular-monolith-first.md)). Every change made by this revision is tagged *(rev)* below.
 
 ---
 
@@ -50,14 +53,18 @@ This is **not** "a ticket booking app". It is a **high-concurrency inventory and
 
 | ID | Requirement |
 |---|---|
-| F1 | List on-sale events and view a seat map with live availability |
-| F2 | Hold one or more seats atomically (all-or-nothing) for a fixed TTL (5 min) |
+| F1 | List on-sale events and their **shows** (one event, many dates/venues), and view a show's seat map with live availability *(rev)* |
+| F2 | Hold one or more seats of a show atomically (all-or-nothing) for a fixed TTL (5 min) |
 | F3 | Release a hold explicitly, or automatically on TTL expiry |
 | F4 | Create a booking from a hold and pay for it |
 | F5 | On payment success → seats become `BOOKED`; on failure/timeout → seats released |
 | F6 | Retried requests (same `Idempotency-Key`) return the original result |
 | F7 | During a hot sale, users wait in a virtual queue and are admitted in batches |
 | F8 | After confirmation: ticket generated, notification sent, analytics/audit recorded — asynchronously |
+| F9 | A user can cancel a pending booking (seats released) and list their own bookings *(rev)* |
+| F10 | An admin can create venues (sections, seat layout), events and shows *(rev)* |
+| F11 | A payment whose outcome is unknown (gateway timeout) is resolved automatically by reconciliation *(rev)* |
+| F12 | Clients viewing a seat map receive live seat-status updates (WebSocket) *(rev, low priority)* |
 
 ### 2.2 Non-functional (the real requirements)
 
@@ -74,10 +81,11 @@ This is **not** "a ticket booking app". It is a **high-concurrency inventory and
 
 ### 2.3 Core invariants (stated formally — used by tests)
 
-1. For every `(event_id, seat_code)` there is **at most one** active hold or booking.
-2. `count(BOOKED seats) == count(seats in CONFIRMED bookings)` per event.
+1. For every `(show_id, seat_id)` there is **at most one** active hold or booking.
+2. `count(BOOKED show seats) == count(booking_seats of CONFIRMED bookings)` per show.
 3. Every `CONFIRMED` booking has exactly one `CAPTURED` payment; every `CAPTURED` payment belongs to a `CONFIRMED` booking or a `REFUNDED` record.
 4. A seat in `HELD` state always has a non-null, unexpired-or-expirable `hold_expires_at`.
+5. No payment stays `UNKNOWN` longer than the reconciliation window (default 15 min) *(rev)*.
 
 ---
 
@@ -102,6 +110,27 @@ Back-of-envelope numbers that justify the design (to be validated in P9).
 ## 4. High-Level Design (HLD)
 
 > Summary only. The full HLD (architecture, capacity, every request flow incl. failures, data model, consistency & failure model) lives in [`hld/`](hld/README.md).
+
+### 4.0 Deployment stages *(rev)*
+
+The diagram in §4.1 is the **target** topology. It is reached in two stages ([ADR 002](adr/002-modular-monolith-first.md)):
+
+| Stage | Core (inventory + booking + payment) | Edge and consumers | When |
+|---|---|---|---|
+| **1. Modular monolith** | One deployable, `ticketing-app`, with three Maven modules. Each module has its own schema and its own ports, and ArchUnit enforces the boundaries. | Separate services from the start | P0.14 → P6 |
+| **2. Extracted** | `inventory-service` and `payment-service` split out. The in-process port adapters are swapped for HTTP clients (with Resilience4j) and webhooks. | Unchanged | P7.8–P7.9, after measurements justify it |
+
+```mermaid
+flowchart LR
+    GW[API Gateway] --> APP
+    subgraph APP["ticketing-app (stage 1)"]
+      BM[booking module] -->|InventoryApi port| IM[inventory module]
+      BM -->|PaymentApi port| PM[payment module]
+    end
+    PM <-->|PaymentGateway port| PSP[Mock PSP / Sandbox]
+    APP --> PG[(Postgres: inventory, booking, payment schemas)]
+    APP -.outbox relay.-> K[[Kafka]] --> CONS[notification · ticket · analytics]
+```
 
 ### 4.1 Architecture
 
@@ -136,15 +165,15 @@ flowchart TD
 | **api-gateway** | none | Routing, JWT validation, rate limiting, correlation IDs | Stateless replicas |
 | **waiting-room-service** | Redis queue | Enqueue, position, admission tokens, admission rate control | Stateless + Redis |
 | **booking-service** | `bookings`, `idempotency_keys`, `outbox` | Booking lifecycle, saga orchestration, idempotency | Stateless replicas |
-| **inventory-service** | `events`, `seat_inventory`, `holds`, `outbox` | Seat state machine, holds, confirm/release, expiry | Replicas + partitioning by section |
-| **payment-service** | `payments` | Mock payment provider: intents, capture, refund, webhooks with configurable failure/latency | Stateless replicas |
+| **inventory-service** | `venues`, `venue_sections`, `seats`, `events`, `shows`, `show_seats`, `holds`, `outbox` | Catalog (venue layout, events, shows), seat state machine, holds, confirm/release, expiry | Replicas + partitioning by section |
+| **payment-service** | `payments`, `refunds` | `PaymentGateway` port with Mock (failure injection) and Sandbox adapters; intents, capture, refund, webhooks; reconciliation of `UNKNOWN` payments | Stateless replicas |
 | **notification-service** | `processed_events` | Consume `BookingConfirmed` → send (log/mail-catcher) | Kafka consumer group |
 | **ticket-service** | `tickets` | Generate QR/ticket payload per confirmed seat | Kafka consumer group |
 | **analytics-service** | `booking_stats` | Aggregates, audit trail | Kafka consumer group |
 
-**Database-per-service** (logical: separate schemas in one Postgres instance for laptop practicality; separable later). No service reads another service's tables.
+**Database-per-service** (logical: separate schemas in one Postgres instance for laptop practicality; separable later). No service reads another service's tables. In stage 1 the same rule applies between modules (§4.0).
 
-### 4.3 Seat state machine
+### 4.3 Seat state machine (per `show_seat`)
 
 ```mermaid
 stateDiagram-v2
@@ -163,11 +192,32 @@ stateDiagram-v2
     PENDING_PAYMENT --> CONFIRMED: payment captured + seats confirmed
     PENDING_PAYMENT --> FAILED: payment declined → release seats
     PENDING_PAYMENT --> EXPIRED: hold TTL passed → release seats
+    PENDING_PAYMENT --> CANCELLED: user cancels → release seats
     CONFIRMED --> [*]
     FAILED --> [*]
+    CANCELLED --> [*]
     EXPIRED --> REFUND_PENDING: late payment arrived
+    CANCELLED --> REFUND_PENDING: payment captured after cancel
     REFUND_PENDING --> REFUNDED
 ```
+
+`CANCELLED` is new *(rev)*. Cancelling a booking that is already `CONFIRMED` (a refund before the show) is optional and out of scope for now.
+
+### 4.4b Payment state machine *(rev)*
+
+```mermaid
+stateDiagram-v2
+    [*] --> INITIATED: intent created (idempotency = bookingId)
+    INITIATED --> PROCESSING: user submitted payment
+    PROCESSING --> CAPTURED: gateway success
+    PROCESSING --> FAILED: gateway decline
+    PROCESSING --> UNKNOWN: gateway timeout / no answer
+    UNKNOWN --> CAPTURED: reconciliation finds success
+    UNKNOWN --> FAILED: reconciliation finds no charge
+    CAPTURED --> REFUNDED: refund (late payment or cancel)
+```
+
+**Why `UNKNOWN`?** If a gateway call times out, the money may or may not have moved. Treating that as `FAILED` would release seats someone has paid for. Treating it as `CAPTURED` would hand out tickets that were never paid for. `UNKNOWN` records the honest state. A **reconciliation job** (P4.8) then asks the gateway for the real outcome, looking it up by idempotency key, and moves the payment to `CAPTURED` or `FAILED`. While a payment is `UNKNOWN`, its seats stay `HELD` until the hold's normal expiry. If reconciliation later finds `CAPTURED` but the hold has already expired, the existing late-payment refund path runs. No new mechanism is needed, and invariant 3 still holds.
 
 ### 4.5 Main flow — hold → pay → confirm (Saga, orchestrated)
 
@@ -194,34 +244,63 @@ sequenceDiagram
 
 Compensations: payment declined → `release hold`; confirm fails transiently → retry with backoff; hold expired before payment → `refund` (late-payment path); repeated failure → DLQ + reconciliation job.
 
-### 4.6 Data model (initial)
+### 4.6 Data model *(rev: Venue / Show model)*
+
+**Catalog vs inventory:** `seats` is the venue's *physical* layout (one row per chair, created once per venue). `show_seats` is the *sellable* inventory: one row per seat **per show**. It is the unit of locking. One event (a concert tour) has many shows (date + venue). Without `shows`, the same chair could not be sold separately for two dates. Full column lists and constraints: [`hld/04-data-model.md`](hld/04-data-model.md).
 
 ```mermaid
 erDiagram
-    EVENTS ||--o{ SEAT_INVENTORY : has
-    EVENTS ||--o{ HOLDS : has
-    HOLDS ||--o{ SEAT_INVENTORY : locks
-    BOOKINGS ||--|| HOLDS : "references (by id, cross-service)"
-    BOOKINGS ||--o{ PAYMENTS : "paid by (cross-service)"
+    VENUES ||--o{ VENUE_SECTIONS : has
+    VENUE_SECTIONS ||--o{ SEATS : contains
+    EVENTS ||--o{ SHOWS : "scheduled as"
+    VENUES ||--o{ SHOWS : hosts
+    SHOWS ||--o{ SHOW_SEATS : sells
+    SEATS ||--o{ SHOW_SEATS : "priced per show"
+    SHOWS ||--o{ HOLDS : has
+    HOLDS ||--o{ SHOW_SEATS : "currently holds"
+    BOOKINGS ||--o{ BOOKING_SEATS : contains
+    BOOKINGS ||--|| HOLDS : "references (by id, cross-module)"
+    BOOKINGS ||--o| PAYMENTS : "paid by (cross-module)"
+    VENUES {
+      uuid id PK
+      string name
+      string city
+    }
+    VENUE_SECTIONS {
+      uuid id PK
+      uuid venue_id FK
+      string code
+    }
+    SEATS {
+      uuid id PK
+      uuid section_id FK
+      string seat_code
+    }
     EVENTS {
       uuid id PK
-      string event_code
+      string name
       string status
-      timestamptz starts_at
     }
-    SEAT_INVENTORY {
+    SHOWS {
       uuid id PK
-      uuid event_id
-      string section
-      string seat_code
+      uuid event_id FK
+      uuid venue_id FK
+      timestamptz starts_at
+      string status
+    }
+    SHOW_SEATS {
+      uuid id PK
+      uuid show_id FK
+      uuid seat_id FK
       string status
       uuid hold_id
       timestamptz hold_expires_at
+      bigint price_minor
       bigint version
     }
     HOLDS {
       uuid id PK
-      uuid event_id
+      uuid show_id FK
       uuid user_id
       string status
       timestamptz expires_at
@@ -229,49 +308,37 @@ erDiagram
     BOOKINGS {
       uuid id PK
       uuid user_id
-      uuid hold_id
+      uuid show_id
+      uuid hold_id UK
       string status
-      numeric amount
+      bigint amount_minor
       bigint version
     }
-    IDEMPOTENCY_KEYS {
-      string idem_key PK
-      uuid user_id
-      string request_hash
-      string status
-      jsonb response
-      timestamptz expires_at
-    }
-    OUTBOX {
-      uuid id PK
-      string aggregate_type
-      uuid aggregate_id
-      string event_type
-      jsonb payload
-      timestamptz created_at
-      timestamptz published_at
+    BOOKING_SEATS {
+      uuid booking_id PK
+      uuid seat_id PK
+      string seat_code
+      bigint price_minor
     }
     PAYMENTS {
       uuid id PK
       uuid booking_id UK
       string status
-      numeric amount
-      string provider_ref
-    }
-    PROCESSED_EVENTS {
-      uuid event_id PK
-      string consumer
-      timestamptz processed_at
+      bigint amount_minor
+      string gateway_ref
     }
 ```
+
+Also per module: `outbox`, `processed_events`, `idempotency_keys` and `booking_sagas` (see the HLD data model). Money is stored in **minor units** (paise) as `bigint`, so there are no floating-point rounding errors.
 
 ### 4.7 Kafka topics
 
 | Topic | Key | Producers | Consumers | Why this key |
 |---|---|---|---|---|
 | `booking.events` | `bookingId` | booking-service (outbox) | notification, ticket, analytics | Per-booking ordering (Created → Confirmed) |
-| `inventory.events` | `eventId:section` | inventory-service (outbox) | analytics, cache updater | Spreads hot events across partitions |
-| `payment.events` | `bookingId` | payment-service | booking-service | Same key as booking → ordered with booking |
+| `inventory.events` | `showId:section` | inventory-service (outbox) | analytics, cache updater | Spreads hot events across partitions |
+| `payment.events` | `bookingId` | payment module/service | booking | Same key as booking → ordered with booking |
+| `seat.updates` *(rev)* | `showId` | inventory (from outbox) | WebSocket push (P5.11) | All updates of one show in order |
 | `*.retry.{1m,5m}` / `*.dlq` | same | consumers | retry consumers / ops | Non-blocking retries, poison-message isolation |
 
 ---
@@ -289,22 +356,27 @@ infrastructure/ → JPA repositories, Redis, Kafka, HTTP clients (adapters out)
 
 **Why:** the domain (seat/booking rules) is testable without a database, and infrastructure (e.g. the locking strategy) can be swapped — which we need for the concurrency comparison.
 
-Design patterns that will be **deliberately used and documented** (each shows up in the LLD write-up with a class diagram):
+Design patterns that will be **deliberately used and documented**. The living registry, with the exact class and file for each pattern, why it was used and what the alternative was, is [`lld/DESIGN_PATTERNS.md`](lld/DESIGN_PATTERNS.md). It is updated in the same change that introduces a pattern.
 
 | Pattern | Where | Purpose |
 |---|---|---|
-| **State** | `Seat`, `Booking` | Legal transitions enforced in one place; illegal ones throw |
+| **State** | `ShowSeat`, `Hold`, `Booking`, `Payment` | Legal transitions enforced in one place; illegal ones throw |
 | **Strategy** | `SeatLockingStrategy` (pessimistic / optimistic / conditional-update / Redis-lock / Redis-Lua) | Swap concurrency approach by config to benchmark them |
+| **Adapter (Ports & Adapters)** | `PaymentGateway` → `MockPaymentGateway`, `SandboxPaymentGateway`; `InventoryApi` → in-process / HTTP adapter *(rev)* | Same core code against a fake PSP, a real sandbox, or a remote service |
 | **Repository** | all persistence | Domain independent of JPA/SQL |
+| **Facade** | each module's `api` package (`InventoryApi`, `PaymentApi`) *(rev)* | One narrow entry point per module; hides internals, makes extraction a swap |
 | **Saga (Orchestrator)** | `BookingSaga` | Multi-step distributed transaction with compensations |
-| **Transactional Outbox** | booking, inventory | Atomic state change + event |
+| **Transactional Outbox** | booking, inventory, payment | Atomic state change + event |
 | **Idempotent Receiver** | Kafka consumers, webhooks | Safe redelivery |
 | **Template Method** | `IdempotentEventConsumer` base class | Dedup + metrics + error handling around `handle()` |
-| **Circuit Breaker / Retry / Bulkhead** | inter-service clients (Resilience4j) | Fail fast, avoid cascading failure |
+| **Observer (pub/sub)** | domain events → outbox → Kafka → consumers / WebSocket push | Producers don't know their consumers |
+| **Chain of Responsibility** | gateway filters (correlation ID → auth → rate limit → admission token) | Each cross-cutting check is one link, ordered by config |
+| **Circuit Breaker / Retry / Bulkhead** | inter-service clients (Resilience4j), stage 2 | Fail fast, avoid cascading failure |
 | **Token Bucket** | rate limiter (Redis Lua) | Smooth burst control |
 | **Factory** | event envelope creation | Consistent event metadata (id, type, version, traceId) |
+| **Builder** | test-data builders (`ShowFixture`, `HoldRequestBuilder`) | Readable concurrency tests |
 
-SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`, `ConfirmHoldUseCase`, …), interfaces for every outbound port, no domain class depending on Spring.
+SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`, `ConfirmHoldUseCase`, …), interfaces for every outbound port, no domain class depending on Spring. Where and how each principle is applied is recorded in [`lld/SOLID.md`](lld/SOLID.md), and code that applies a pattern carries a short Javadoc line that points back to the registry entry.
 
 ---
 
@@ -317,6 +389,10 @@ SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`
 | Fast state / queue | **Redis 7** | Memcached, Hazelcast | Atomic Lua scripts, sorted sets for queues, TTLs, single-threaded atomicity |
 | Messaging | **Kafka (KRaft)** | RabbitMQ, Redis Streams, SQS | Partitioned ordered log, replay, consumer groups, consumer-lag metrics; the de-facto choice for event-driven backends |
 | Outbox relay | **Polling publisher** first, **Debezium CDC** as stretch | Kafka transactions only | Polling is simple and explainable; CDC removes polling load — shown as an upgrade path |
+| Architecture style *(rev)* | **Modular monolith first, extract later** | Microservices from day one, plain monolith | Proves correctness without network noise first; boundaries are kept so extraction is a swap ([ADR 002](adr/002-modular-monolith-first.md)) |
+| Payment provider *(rev)* | **`PaymentGateway` port: Mock + Razorpay test mode** | Stripe test mode, mock only | The mock gives deterministic failure injection for tests and chaos; the sandbox proves the adapter against a real API (INR, webhooks, order lookup for reconciliation). Stripe works the same way and can be swapped in |
+| Live updates *(rev)* | **WebSocket (STOMP over Spring WebSocket)** | Server-Sent Events, polling | Push to many viewers; STOMP gives per-show topics. SSE is a valid simpler alternative (one-way only) |
+| Module boundaries *(rev)* | **Maven modules + ArchUnit** | Spring Modulith | Compile-time boundaries and an explicit rule test; see ADR 002 |
 | Gateway | **Spring Cloud Gateway** | Kong, NGINX, Envoy | Same stack, programmable filters for rate limiting and admission-token checks |
 | Resilience | **Resilience4j** | Hystrix (dead), Istio | Lightweight, Micrometer-integrated |
 | Migrations | **Flyway** | Liquibase | Plain SQL, simple |
@@ -336,9 +412,12 @@ SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`
 ├── common/                       # event envelope, shared DTOs, idempotency & outbox libs
 ├── api-gateway/
 ├── waiting-room-service/
-├── booking-service/
-├── inventory-service/            # exists
-├── payment-service/
+├── inventory/                    # module: catalog + seat inventory (from inventory-service, P0.14)
+├── booking/                      # module: booking lifecycle, idempotency, saga
+├── payment/                      # module: PaymentGateway port + adapters, reconciliation
+├── ticketing-app/                # stage-1 deployable that bundles the three modules
+├── inventory-service/            # stage-2 extraction (P7.8); today: current bootstrap code
+├── payment-service/              # stage-2 extraction (P7.9)
 ├── notification-service/
 ├── ticket-service/
 ├── analytics-service/
@@ -352,8 +431,10 @@ SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`
     ├── PROJECT_PLAN.md           # this file
     ├── DEVELOPMENT_LOG.md        # what was built per phase, and why
     ├── adr/                      # architecture decision records
+    ├── srs/                      # SRS, use-case and activity diagrams
     ├── hld/                      # diagrams, capacity, flows
-    ├── lld/                      # class diagrams per service
+    ├── lld/                      # class diagrams, DESIGN_PATTERNS.md, SOLID.md
+    ├── api/                      # OpenAPI contracts
     └── results/                  # load and chaos test reports
 ```
 
@@ -377,10 +458,15 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.6 ✅ | Master plan + development log (this document) | `docs/PROJECT_PLAN.md`, `docs/DEVELOPMENT_LOG.md` |
 | P0.7 ✅ | Convert to Maven multi-module parent + `common` module | root `pom.xml` |
 | P0.8 ✅ | HLD pack: architecture, capacity, flows, ERD in `docs/hld/` | diagrams |
-| P0.9 ⬜ | API contracts (OpenAPI) for inventory and booking | `docs/api/*.yaml` |
-| P0.10 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
+| P0.9 ✅ | Design revision after the TicketFlow crosswork: Show/Venue model, booking `CANCELLED`, payment `UNKNOWN` + reconciliation, sandbox gateway, thin admin/history/WebSocket scope, error format; ADR 002 (modular monolith first) *(rev)* | plan, HLD, `docs/adr/002-…` |
+| P0.10 ✅ | LLD registries: design patterns and SOLID, each entry → class/file, why, alternative *(rev)* | `docs/lld/DESIGN_PATTERNS.md`, `docs/lld/SOLID.md` |
+| P0.11 ⬜ | API contracts (OpenAPI) for inventory and booking, show-based paths | `docs/api/*.yaml` |
+| P0.12 ⬜ | SRS: actors, use cases, use-case and activity diagrams *(rev)* | `docs/srs/` |
+| P0.13 ⬜ | Domain class diagrams (inventory, booking, payment) *(rev)* | `docs/lld/class-diagrams.md` |
+| P0.14 ⬜ | Restructure into a modular monolith: `inventory`, `booking`, `payment` modules + `ticketing-app`; ArchUnit boundary tests *(rev)* | Maven modules |
+| P0.15 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
 
-**Why first:** multi-module now avoids painful restructuring later; contracts first lets services be built independently.
+**Why first:** multi-module now avoids painful restructuring later; contracts and UML first let each module be built against a fixed design.
 
 ---
 
@@ -390,14 +476,15 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 | Part | Task | Details / why |
 |---|---|---|
+| P1.0 ⬜ | Show-based schema *(rev)* | Flyway V2 in the `inventory` schema: `venues`, `venue_sections`, `seats`, `events`, `shows`, `show_seats`, `holds` (with `show_id`); demo venue + show with 100 seats; drop `seat_inventory`. Hold code switches to `show_seats`. |
 | P1.1 🔨 | Atomic multi-seat hold | Already: conditional `UPDATE … WHERE status='AVAILABLE'` per seat in one transaction, seats sorted to avoid deadlocks. Add: single batched `UPDATE … WHERE seat_code = ANY(?)` and compare affected-row count to requested count (one round trip instead of N). |
 | P1.2 ⬜ | Lazy expiry in claim query | `WHERE status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now())` — correctness no longer depends on the expiry worker being on time. |
-| P1.3 ⬜ | Domain state machine | `SeatStatus`/`HoldStatus` transitions in the domain layer; illegal transitions throw. Unit-tested without DB. |
+| P1.3 ⬜ | Domain state machine | `SeatStatus`/`HoldStatus` transitions in the domain layer; illegal transitions throw. Unit-tested without DB. Align stored `ACTIVE` with API `HELD`; add `timestamp` to `ApiError`. |
 | P1.4 ⬜ | Release hold & confirm hold APIs | `DELETE /holds/{id}`, `POST /holds/{id}/confirm`. Both conditional on `hold_id` + owner + not expired; idempotent (repeat confirm returns same result). |
-| P1.5 ⬜ | Seat map read API | `GET /events/{id}/seats` — read path separated from write path (later cached in Redis). |
+| P1.5 ⬜ | Catalog & seat map read APIs | `GET /events`, `GET /events/{id}/shows`, `GET /shows/{id}/seats`. Read path separated from write path (later cached in Redis). |
 | P1.6 ⬜ | **Concurrency test suite** | Testcontainers Postgres; 500 threads fight for 1 seat → exactly 1 winner; 2,000 threads for 100 seats → exactly 100; overlapping multi-seat requests → no partial holds. Runs in CI. |
 | P1.7 ⬜ | `SeatLockingStrategy` (Strategy pattern) | Implementations: (a) **pessimistic** `SELECT … FOR UPDATE`, (b) **optimistic** `version` check + retry, (c) **conditional update** (current), (d) **Redis distributed lock** (`SET NX PX` + fencing token), (e) **Redis Lua** atomic multi-seat check-and-set. Selected by config. |
-| P1.8 ⬜ | Benchmark & ADR 002 | Same k6/JMH scenario against each strategy: throughput, p99, conflict rate, deadlocks, correctness under Redis failure. Write `docs/results/locking-comparison.md` + ADR choosing the production strategy. |
+| P1.8 ⬜ | Benchmark & ADR 003 | Same k6/JMH scenario against each strategy: throughput, p99, conflict rate, deadlocks, correctness under Redis failure. Write `docs/results/locking-comparison.md` + ADR choosing the production strategy. |
 | P1.9 ⬜ | Inventory metrics | `seat_hold_attempts_total`, `seat_hold_conflicts_total`, `hold_latency_seconds` histogram. |
 
 **Key reasoning to document:**
@@ -430,12 +517,14 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 | Part | Task | Details / why |
 |---|---|---|
-| P3.1 | `booking-service` skeleton | Own schema, hexagonal layout, Flyway. |
-| P3.2 | Booking aggregate + state machine | `PENDING_PAYMENT → CONFIRMED / FAILED / EXPIRED → REFUND_PENDING → REFUNDED`, with optimistic `version`. |
-| P3.3 | Inventory client | HTTP client with timeouts, retry (only idempotent calls), circuit breaker, bulkhead (Resilience4j). |
+| P3.1 | `booking` module skeleton | Own `booking` schema, hexagonal layout, Flyway, inside `ticketing-app`. |
+| P3.2 | Booking aggregate + state machine | `PENDING_PAYMENT → CONFIRMED / FAILED / EXPIRED / CANCELLED → REFUND_PENDING → REFUNDED`, with optimistic `version`; `BookingSeat` lines copy seat code and price at booking time. |
+| P3.3 | Inventory port | `InventoryApi` interface (hold / confirm / release) with an in-process adapter. The HTTP adapter (timeouts, retry for idempotent calls only, circuit breaker, bulkhead) arrives with extraction in P7.8. |
 | P3.4 | **Idempotency keys** | Table `idempotency_keys(key, user_id, request_hash, status, response, expires_at)`. Flow: `INSERT … ON CONFLICT DO NOTHING` → if new, process and store response; if existing & completed → return stored response; if existing & in-progress → `409 Retry-After`; if same key with different body → `422`. |
 | P3.5 | Idempotency as reusable filter | Packaged in `common` as a Spring interceptor so every mutating endpoint gets it. |
 | P3.6 | Tests | Concurrent duplicate requests with the same key → one booking; timed-out client retry → same response. |
+| P3.7 | Cancel booking *(rev)* | `POST /bookings/{id}/cancel` while `PENDING_PAYMENT` → release hold, cancel payment intent; idempotent. |
+| P3.8 | Booking history *(rev)* | `GET /bookings` (current user, paginated, newest first) and `GET /bookings/{id}`. |
 
 **Alternatives to note:** Redis-only idempotency (fast, but lost on eviction/failover → duplicates); unique constraint on natural key (works only when a natural key exists).
 
@@ -447,13 +536,14 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 | Part | Task | Details / why |
 |---|---|---|
-| P4.1 | `payment-service` (mock PSP) | Payment intents, capture, refund; configurable latency, decline rate, timeout rate, duplicate-webhook rate — so failures can be demonstrated on demand. |
-| P4.2 | Payment idempotency | One payment per `bookingId` (unique constraint); provider calls carry idempotency key. Prevents double charge. |
+| P4.1 | `payment` module + `PaymentGateway` port *(rev)* | Adapter pattern: `MockPaymentGateway` (configurable latency, decline, timeout and duplicate-webhook rates, so failures can be shown on demand) and `SandboxPaymentGateway` (Razorpay test mode), selected by config. Intents, capture, refund. |
+| P4.2 | Payment states + idempotency | `INITIATED → PROCESSING → CAPTURED / FAILED / UNKNOWN → REFUNDED` *(rev)*. One payment per `bookingId` (unique constraint); provider calls carry an idempotency key. Prevents double charge. |
 | P4.3 | Webhook handling | Signed webhooks, idempotent receiver, out-of-order safe (state machine ignores stale transitions). |
 | P4.4 | **Booking saga orchestrator** | Persisted saga state (step, attempts, next_retry_at). Steps: hold → create intent → await capture → confirm hold → confirm booking. Compensations: release hold, refund. |
 | P4.5 | Timeout handling | Payment not captured before hold expiry → cancel intent; capture arrives after expiry → late-payment path → automatic refund + `BookingExpired` event. |
 | P4.6 | Crash recovery | Saga state persisted every step; on restart, a recovery job resumes in-flight sagas. Demo: kill booking-service between "payment captured" and "seat confirmed" → system still converges. |
-| P4.7 | ADR 003 | Orchestration vs choreography: orchestration chosen for a central, debuggable view of a 5-step money flow; choreography used for side effects (notifications etc.). Also why not 2PC/XA (blocking, poor availability, not supported by Kafka/PSP). |
+| P4.7 | ADR 004 | Orchestration vs choreography: orchestration chosen for a central, debuggable view of a 5-step money flow; choreography used for side effects (notifications etc.). Also why not 2PC/XA (blocking, poor availability, not supported by Kafka/PSP). |
+| P4.8 | **Payment reconciliation job** *(rev)* | Every minute: payments in `UNKNOWN`, or stuck in `PROCESSING` past a timeout, are looked up at the gateway by idempotency key / order id → `CAPTURED` or `FAILED`; the saga continues from there (late capture → refund path). Metric `payments_unknown`; alert if any payment is older than the window (invariant 5). |
 
 ---
 
@@ -473,6 +563,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P5.8 | Analytics / audit service | Booking counts, conversion, append-only audit table. |
 | P5.9 | Retry topics + DLQ | Non-blocking retries (`retry.1m`, `retry.5m`) then `dlq`; DLQ replay CLI/endpoint. |
 | P5.10 | Stretch: Debezium CDC relay | Replace polling with CDC from Postgres WAL; compare latency and DB load. |
+| P5.11 | Live seat updates (WebSocket) *(rev, low)* | Consumer of `seat.updates` pushes seat changes to `/topic/shows/{id}/seats` over STOMP. Read-only and eventually consistent; never used for decisions. |
 
 **Delivery semantics to explain:** at-least-once delivery + idempotent consumers = effectively-once processing. Why not Kafka exactly-once transactions end-to-end: they don't cover external side effects (email, DB in another service).
 
@@ -485,17 +576,18 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | Part | Task | Details / why |
 |---|---|---|
 | P6.1 | API gateway | Spring Cloud Gateway routes, correlation-ID filter, request size limits. |
-| P6.2 | Minimal auth | JWT issued by a tiny auth endpoint (or static keys for load tests); `userId` from token instead of `X-User-Id` header. Intentionally minimal. |
-| P6.3 | **Distributed token-bucket rate limiter** | Redis Lua script: refill + take atomically; keys per user (10 req/s on reserve) and per IP (100 req/min). Returns `429` + `Retry-After`. Compare with fixed window / sliding log in ADR. |
+| P6.2 | Minimal auth *(rev)* | Register/login issuing a JWT with role `USER` or `ADMIN` (static tokens for load tests); `userId` from token instead of `X-User-Id` header. Intentionally minimal. |
+| P6.3 | **Distributed token-bucket rate limiter** | Redis Lua script: refill + take atomically; keys per user (10 req/s on reserve) and per IP (100 req/min). Returns `429` + `Retry-After`. Compare with fixed window / sliding log in ADR 005. |
 | P6.4 | **Virtual waiting room** | `ZADD queue:{eventId} <arrivalTs> <userId>`; `ZRANK` for position; ETA from admission rate. |
 | P6.5 | Admission controller | Every second admits N users (`ZPOPMIN`) while `active_sessions < 2,000`; issues a short-lived **signed admission token** (JWT/HMAC) the gateway verifies statelessly. |
 | P6.6 | Session lifecycle | Active sessions expire after booking or inactivity → slots freed for next users. |
 | P6.7 | Load shedding & backpressure | Gateway rejects fast when downstream circuit is open or queue too long; adaptive admission rate based on inventory p99 latency (feedback loop). |
 | P6.8 | Bot/duplicate protection | One queue entry per user, token bound to user + event. |
+| P6.9 | Thin admin APIs *(rev, low)* | `ADMIN` only: create venue + sections + seat layout, event, show (generates `show_seats`), open/close sale. No admin UI. |
 
 ---
 
-### Phase 7 — Hot-event scaling & partitioning ⬜
+### Phase 7 — Hot-event scaling, partitioning & service extraction ⬜
 
 **Goal:** show reasoning for the case where one event receives ~all traffic.
 
@@ -507,6 +599,9 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P7.4 | Connection pool & thread tuning | HikariCP sizing (`cores*2+spindles` reasoning), virtual threads, Postgres `max_connections`. |
 | P7.5 | Read/write split | Seat map reads from Redis / read replica; writes to primary only. |
 | P7.6 | Experiment report | Normal event (500 users) vs hot event (50k users), before/after partitioning. ADR 006. |
+| P7.7 | Extraction decision *(rev)* | From the P7.6 numbers: does inventory need to scale separately from booking? Record the evidence in ADR 002's follow-up. |
+| P7.8 | Extract `inventory-service` *(rev)* | Module becomes its own Boot app serving `docs/api/inventory-service.yaml`; booking swaps to the HTTP `InventoryApi` adapter with Resilience4j. Same schema, no data migration. Re-run P1.6 and P9 tests. |
+| P7.9 | Extract `payment-service` *(rev)* | Isolates the third-party gateway, its secrets and failures; booking talks to it over HTTP + webhooks. |
 
 ---
 
@@ -547,12 +642,12 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | Part | Experiment | Expected result |
 |---|---|---|
 | P10.1 | Kill a booking-service replica mid-load | Others keep serving; in-flight sagas resume; 0 oversell |
-| P10.2 | Kill inventory-service replica | Retries + circuit breaker; no partial holds |
+| P10.2 | Kill inventory-service replica (after P7.8) | Retries + circuit breaker; no partial holds |
 | P10.3 | Redis down | Fast path disabled; bookings continue via Postgres; waiting room degrades gracefully |
 | P10.4 | Kafka down | Bookings still succeed; outbox grows; drains on recovery with no loss |
 | P10.5 | Inject duplicate Kafka messages | Consumers dedupe; one email, one ticket |
 | P10.6 | Payment webhook duplicated / out of order / delayed past expiry | No double charge; late payment refunded |
-| P10.7 | Network latency/partition (Toxiproxy) | Timeouts fire, breakers open, system recovers |
+| P10.7 | Network latency/partition (Toxiproxy), incl. gateway timeout → `UNKNOWN` payment | Timeouts fire, breakers open, reconciliation resolves `UNKNOWN`, system recovers |
 | P10.8 | Crash between payment capture and seat confirm | Saga recovery converges to CONFIRMED |
 | P10.9 | Report | `docs/results/chaos.md` — experiment, hypothesis, observation, metric screenshot. |
 
@@ -576,7 +671,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | Part | Task |
 |---|---|
 | P12.1 | Final HLD document (`docs/hld/`) — architecture, flows, scaling, trade-offs |
-| P12.2 | Final LLD document (`docs/lld/`) — class diagrams per service, patterns, SOLID |
+| P12.2 | Final LLD document (`docs/lld/`) — class diagrams per module, patterns and SOLID registries reviewed against the code |
 | P12.3 | Polished README with architecture diagram, quickstart, results summary |
 | P12.4 | Demo script (§10) rehearsed and recorded |
 | P12.5 | Viva/interview Q&A sheet: "why not X?" for every major decision |
@@ -601,7 +696,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | 15 | P11 |
 | 16 | P12 |
 
-**If time runs short, cut in this order:** P12.6 UI → P5.10 Debezium → P7.3 partitioning → P11.5 HPA → P2.5 reconciliation. **Never cut:** P1, P3.4, P4, P5.2, P9, P10.
+**If time runs short, cut in this order:** P12.6 UI → P5.11 WebSocket → P6.9 admin APIs → P7.9 payment extraction → P5.10 Debezium → P7.3 partitioning → P11.5 HPA → P2.5 reconciliation. **Never cut:** P1, P3.4, P4, P5.2, P9, P10.
 
 ### Optional team split (if working with 4 people)
 
@@ -664,8 +759,9 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ## 12. Working rules
 
-1. **Git identity:** all commits and pushes go through the project owner's own GitHub account and configured git identity only. No third-party co-author trailers or tool attribution lines in commits or PR descriptions.
+1. **Git identity:** commits are authored by the two project partners, Vivek Vishnoi and Yeeshu, alternating commit by commit, and each commit credits the other partner with a `Co-authored-by:` trailer. Timestamps are real; history is never backdated or rewritten. No tool attribution lines in commits or PR descriptions.
 2. **Documentation per change:** every part (`Px.y`) that is completed gets an entry in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md): what was built, where, why, and which alternatives were rejected. Significant decisions also get an ADR.
 3. **Small steps:** one part ≈ one focused change; tests and docs in the same change.
 4. **Conventional commits:** `feat(inventory): …`, `test(booking): …`, `docs: …`, `chore(ci): …`.
 5. **Correctness first:** no part touching inventory, booking or payment is "done" without a concurrency/idempotency test.
+6. **Patterns and SOLID are documented where used:** any change that introduces a design pattern or a notable SOLID decision updates [`lld/DESIGN_PATTERNS.md`](lld/DESIGN_PATTERNS.md) or [`lld/SOLID.md`](lld/SOLID.md) in the same commit.
