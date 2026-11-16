@@ -668,3 +668,51 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Run log:** "8 workers expired 2000 holds in 0.12 s (550, 200, 400, 500, 50, 300, 0, 0 per worker)". The two idle workers are expected: they started after the queue was drained.
 - **Environment note:** `git push` hung twice after Docker Desktop restarted. The macOS keychain credential helper was waiting on an invisible prompt. Pushes now use `gh`'s stored credentials (`credential.helper=!gh auth git-credential`) with a 60 s timeout.
 - **ADR:** none (a reversible, local choice, recorded in the pattern registry)
+
+### P2.3 — Redis seat cache with versioned, order-independent updates
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **Events:** new `domain.event.SeatsChanged` and `application.SeatEvents`; all four write paths publish it (`CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob`).
+  - **Ports:** `SeatLockingStrategy.ClaimedSeat` and `ShowSeatStore` now return row versions (`SeatVersion`), and the strategies' SQL returns `version`.
+  - **New `infrastructure.cache` package:** `SeatStateCache`, `SeatSnapshots`, `SeatCacheUpdater`, `CachedCatalogReadStore`, `SeatCacheConfig`.
+  - **Config:** `application.yml` (`inventory.seat-cache.*`, Redis timeouts of 250 ms), test properties.
+  - **Tests:** `SeatCacheIT`; the benchmark harness constructor is updated.
+  - **Docs:** plan, HLD §4.5 Redis keys, API spec, registries (new pattern #24).
+- **What was built:**
+  - **`SeatsChanged` event:** every seat write now publishes it, listing each changed seat with its state, hold expiry and new row `version`.
+  - **Cache layout:** `seatstate:{showId}` maps seat → `version|A/H/B|expiryMs`, plus `seatstate:{showId}:ready`.
+  - **Updater:** an after-commit observer queues each event to a bounded executor (2 threads, queue 10,000). A Lua script applies the event only where the version is newer. A full queue drops and counts (`seat_cache_updates_total{result}`).
+  - **Seat-map reads:**
+    - **Layout:** seat id, row, column and price are immutable, so they're kept in memory per show.
+    - **States:** read from Redis.
+    - **Cold show:** warmed from Postgres on first read, then marked ready.
+    - **Any Redis error:** falls back to Postgres (`seat_map_reads_total{source=redis|warmup|database}`).
+    - **Lazy expiry still applies:** a cached `HELD` past expiry shows `AVAILABLE`.
+  - **Redis timeouts:** 250 ms for commands and connect, instead of Lettuce's 60 s default.
+- **Why this approach:**
+  - **Versions make delivery order irrelevant (pattern #24):** in-process async events can be applied out of order, and later Kafka events are at-least-once. Keeping the highest row version per seat makes the cache converge to the newest state anyway. It also protects warm-up: a snapshot older than an already-applied event can't overwrite it (tested).
+  - **Ready marker:** updates may create entries before a show is warmed, but nobody reads the show until the full snapshot has been applied. A half-filled hash would show missing seats as available.
+  - **Async updates, not inline:** after-commit listeners still run on the request thread, *before* the database connection returns to the pool. A Redis call there would recreate the P1.8 / ADR 003 failure. The bounded queue keeps a slow Redis from ever blocking a request; dropped updates are repaired by P2.5.
+  - **Decorator plus fallback:** the read side gets faster without any write-path change. With Redis down, seat maps still work, just at database speed.
+  - **One hash per show for now:** a show with 5,000 seats is one ~100 KB hash, so `HGETALL` is cheap. Per-section keys come with hot-event partitioning (P7.1), where the section becomes the shard key.
+- **Problem found by the tests (and fixed):** the read script first returned Lua `false` for "not ready". Spring Data Redis delivered that as a one-element list `[null]`, which the code took for "cached, but empty", so every seat showed `AVAILABLE` and no warm-up ever ran. The script now returns an empty array, and the decoder also treats `[null]` as "not cached".
+- **Alternatives considered:**
+  - **Spring Cache (`@Cacheable`) on the seat map:** simple, but it caches whole responses with a TTL. It goes stale for the whole TTL after every change, and can't apply per-seat updates.
+  - **Redis bitmaps (one bit per seat):** smaller, but they lose the hold expiry and version, which lazy expiry and ordering need.
+  - **CDC from Postgres (Debezium) to feed the cache:** this solves durability properly, and is a stretch goal (P5.10). The outbox in P5.2 is the planned step.
+  - **Caching the layout in Redis too:** it's immutable, so in-process memory is faster and needs no invalidation.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 143 tests and 1 skipped.
+  - **`SeatCacheIT`:**
+    - the first read warms 100 seats and sets the ready marker, and later reads follow Redis;
+    - hold, confirm, release and the expiry worker all reach the cache, with versions equal to the database rows;
+    - an older version never overwrites a newer one;
+    - a half-filled hash is not served, and warm-up doesn't overwrite a newer event;
+    - an expired cached hold shows `AVAILABLE`;
+    - with Redis paused, the read falls back to Postgres, bounded by the timeout.
+  - **Smoke test of the packaged jar with the Compose Redis:**
+    - the first read (warm-up) took 316 ms;
+    - after a hold, the seat showed `HELD` from Redis in 21 ms, and the hash entry carried its version;
+    - with Redis stopped, the same seat was still `HELD`, served from Postgres in 267 ms;
+    - the counters read 1 read each from redis, warmup and database, and 1 applied update.
+- **ADR:** none (follows ADR 001: Postgres authority, Redis as cache)

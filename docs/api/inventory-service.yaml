@@ -77,8 +77,8 @@ paths:
       description: |
         A seat whose hold has expired is reported `AVAILABLE` (lazy expiry, P1.2), because a hold
         request for it would succeed. Seats are ordered by section, row, column.
-        Served from the Redis availability cache once P2.3 is built, so it may lag the database by
-        well under a second. A stale "available" seat only leads to a fast 409 on hold, never an
+        Served from the Redis seat cache (P2.3), kept current from committed seat changes, so it may
+        lag the database by well under a second; if Redis is unavailable it is served from Postgres. A stale "available" seat only leads to a fast 409 on hold, never an
         oversell. Live changes are pushed on WebSocket topic `/topic/shows/{showId}/seats` (P5.11).
       x-plan-part: P1.5 (implemented)
       parameters:

@@ -1,31 +1,33 @@
 package com.vivek.ticketreservation.inventory.application.port;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
- * Outbound port: seat transitions driven by a hold (confirm, release). Claiming is the
+ * Outbound port: seat transitions driven by a hold (confirm, release, expiry). Claiming is the
  * {@link SeatLockingStrategy}'s job.
  *
  * <p>Every write is conditional on {@code hold_id = :holdId AND status = 'HELD'}: ownership by hold id,
  * as in {@code domain.ShowSeat}, so a stale actor never moves a seat another hold has since claimed.
+ * Writes return each changed seat with its new row version, for {@code SeatsChanged} events (P2.3).
  */
 public interface ShowSeatStore {
 
-    /** HELD → BOOKED for the seats this hold still owns. @return number of seats booked. */
-    int bookSeatsOf(UUID holdId);
-
-    /** HELD → AVAILABLE for the seats this hold still owns. @return number of seats released. */
-    int releaseSeatsOf(UUID holdId);
+    /** HELD → BOOKED for the seats this hold still owns. */
+    List<SeatVersion> bookSeatsOf(UUID holdId);
 
     /**
      * HELD → AVAILABLE for every seat these holds still own, in one batch.
-     * @return released seat codes per hold id (holds that own no seat any more are absent)
+     * @return released seats per hold id (holds that own no seat any more are absent)
      */
-    java.util.Map<UUID, List<String>> releaseSeatsOfHolds(List<UUID> holdIds);
+    Map<UUID, List<SeatVersion>> releaseSeatsOfHolds(List<UUID> holdIds);
 
     /** Seat codes with their frozen prices (BR-05), in seat-code order. */
     List<PricedSeat> prices(UUID showId, List<String> seatCodes);
 
     record PricedSeat(String seatCode, long priceMinor) { }
+
+    /** A seat that changed, with its row version after the change. */
+    record SeatVersion(String seatCode, long version) { }
 }

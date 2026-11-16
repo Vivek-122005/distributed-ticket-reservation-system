@@ -43,7 +43,7 @@ class ConditionalUpdateStrategy implements SeatLockingStrategy {
                    hold_expires_at = :expiresAt, version = s.version + 1
               FROM target
              WHERE s.id = target.id
-            RETURNING s.seat_code, s.price_minor
+            RETURNING s.seat_code, s.price_minor, s.version
             """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -58,6 +58,6 @@ class ConditionalUpdateStrategy implements SeatLockingStrategy {
                 .addValue("holdId", holdId)
                 .addValue("userId", userId)
                 .addValue("expiresAt", Timestamp.from(expiresAt));
-        return jdbc.query(CLAIM, params, (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor")));
+        return jdbc.query(CLAIM, params, (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor"), rs.getLong("version")));
     }
 }

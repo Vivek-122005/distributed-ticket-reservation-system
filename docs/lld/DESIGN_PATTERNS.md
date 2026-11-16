@@ -35,9 +35,10 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | ⬜ P7.8 | HTTP adapters (Resilience4j) |
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
 | 20 | [Fencing token](#20-fencing-token) | Concurrency | ✅ P1.7 | `RedisLockStrategy` + `show_seats.lock_fence` |
-| 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy` |
+| 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7, P2.3 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy`; `CachedCatalogReadStore` wraps `JdbcCatalogReadStore` |
 | 23 | [Competing consumers (SKIP LOCKED work queue)](#23-competing-consumers-skip-locked-work-queue) | Concurrency | ✅ P2.1–P2.2 | `ExpireHoldsJob` via `JdbcHoldStore.lockExpired` |
-| 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
+| 24 | [Versioned last-writer-wins](#24-versioned-last-writer-wins-order-independent-cache-updates) | Consistency | ✅ P2.3 | `SeatStateCache.APPLY` + row `version` in `SeatsChanged` |
+| 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5, Redis read model P2.3 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
 
@@ -169,7 +170,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** copying the dedup code into every consumer, which drifts. Composition with a decorator would also work; Template Method is clearer when the skeleton is fixed.
 
 ## 14. Observer / Publish-Subscribe
-- **Status:** 🔨 in-process stage ✅ (P2.1): the application port `inventory.application.port.InventoryEventPublisher` publishes framework-free domain events (`inventory.domain.event.HoldExpired`). The adapter `infrastructure.SpringInventoryEventPublisher` uses Spring application events, and observers react with `@TransactionalEventListener` (after commit only), for example `MicrometerHoldMetrics.on(HoldExpired)`. The durable stage (outbox → Kafka, consumers in other services) is ⬜ P5; it swaps only the adapter.
+- **Status:** 🔨 in-process stage ✅ (P2.1): the application port `inventory.application.port.InventoryEventPublisher` publishes framework-free domain events (`inventory.domain.event.HoldExpired`). The adapter `infrastructure.SpringInventoryEventPublisher` uses Spring application events, and observers react with `@TransactionalEventListener` (after commit only), for example `MicrometerHoldMetrics.on(HoldExpired)` and `infrastructure.cache.SeatCacheUpdater.on(SeatsChanged)` (P2.3). The latter hands the work to a bounded executor, so a slow Redis never holds a request's database connection. The durable stage (outbox → Kafka, consumers in other services) is ⬜ P5; it swaps only the adapter.
 - **Plan:** modules publish domain events (via the outbox). Notification, ticket, analytics and the WebSocket push subscribe through Kafka consumer groups.
 - **Why:** producers don't know or wait for consumers, and new consumers need no producer change (OCP at system level).
 - **Alternative:** direct synchronous calls to each side effect. These couple booking latency and availability to email or ticket services.
@@ -222,7 +223,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **ZooKeeper/etcd leases with revision numbers:** proper fencing, but a third system on the hot path.
 
 ## 21. Read/write separation (CQRS-lite)
-- **Status:** ✅ P1.5 (Redis read model in P2.3)
+- **Status:** ✅ P1.5; Redis read model ✅ P2.3 (`infrastructure.cache.CachedCatalogReadStore` + `SeatStateCache`, fed by `SeatsChanged` events)
 - **Where:**
   - **Published read interfaces:** `inventory.api.CatalogQuery` and `SeatMapQuery`, implemented by `application.CatalogQueries` (`@Transactional(readOnly = true)`).
   - **Read port:** `application.port.CatalogReadStore`, which returns ready-made views and no aggregates.
@@ -240,6 +241,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 ## 22. Decorator
 - **Status:** ✅ P1.7
 - **Where:** `inventory.infrastructure.locking.RedisLuaStrategy` implements `SeatLockingStrategy` and wraps another `SeatLockingStrategy`, the `ConditionalUpdateStrategy`. `SeatLockingConfig` composes them.
+- **Second use (P2.3):** `infrastructure.cache.CachedCatalogReadStore` implements `CatalogReadStore` and wraps the JDBC store. It answers seat maps from Redis, and delegates everything else (and every Redis failure) to the database. `SeatCacheConfig` makes it `@Primary`, so `CatalogQueries` gets the cached version without knowing it.
 - **Problem:** the Redis filter adds behaviour *in front of* the authoritative claim: reject early, set marks, and undo them on rollback. It must not duplicate or change the claim itself.
 - **Why:**
   - **Same interface:** the decorator has the same interface, so the use case can't tell the difference.
@@ -265,3 +267,22 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **ShedLock (one replica runs the job at a time, via a lock row):** a correct, popular choice when a job *can't* be partitioned. Here it would only remove parallelism, and adds a lock table plus TTL tuning (a lock held past a crash delays cleanup until it expires).
   - **Leader election (Kubernetes Lease, ZooKeeper):** same single-runner result, with more infrastructure.
   - **A message queue of expiry timers:** precise, but a second source of truth about holds.
+
+## 24. Versioned last-writer-wins (order-independent cache updates)
+- **Status:** ✅ P2.3
+- **Where:**
+  - **Source of versions:** every seat write returns the row's `version` (`RETURNING … version`).
+  - **Event:** `domain.event.SeatsChanged` carries those versions.
+  - **Guarded write:** `infrastructure.cache.SeatStateCache.APPLY` (Lua) keeps an entry only if the incoming version is higher.
+  - **Warm-up:** uses the same script, then sets a `:ready` marker.
+- **Problem:**
+  - **Out of order:** cache updates come from asynchronous events, which can arrive late, twice, or swapped (a release processed after the re-hold that followed it).
+  - **Warm-up races:** a warm-up snapshot can be older than an event that was already applied.
+- **Why:**
+  - **Monotonic versions:** the database row version only ever increases, so "highest version wins" makes the cache converge to the newest state whatever the delivery order.
+  - **Atomic:** the comparison runs inside Redis (one script), so concurrent updaters can't interleave between check and write.
+  - **No half-filled reads:** the ready marker means readers never see a partly warmed hash.
+- **Alternative:**
+  - **Overwrite blindly:** the last *delivered* wins, not the last *written*, so stale data appears under reordering.
+  - **Single-threaded ordered delivery:** a head-of-line blocking risk, and still wrong if events are lost and replayed.
+  - **Delete-on-change and re-read from Postgres:** simple, but every change turns into a database read during the hottest seconds.

@@ -4,6 +4,7 @@ import com.vivek.ticketreservation.inventory.application.port.DatabaseClock;
 import com.vivek.ticketreservation.inventory.application.port.HoldStore;
 import com.vivek.ticketreservation.inventory.application.port.InventoryEventPublisher;
 import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore;
+import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore.SeatVersion;
 import com.vivek.ticketreservation.inventory.domain.Hold;
 import com.vivek.ticketreservation.inventory.domain.event.HoldExpired;
 import org.springframework.stereotype.Service;
@@ -34,9 +35,10 @@ public class ExpireHoldsJob {
     private final ShowSeatStore seats;
     private final DatabaseClock clock;
     private final InventoryEventPublisher events;
+    private final SeatEvents seatEvents;
 
-    ExpireHoldsJob(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, InventoryEventPublisher events) {
-        this.holds = holds; this.seats = seats; this.clock = clock; this.events = events;
+    ExpireHoldsJob(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, InventoryEventPublisher events, SeatEvents seatEvents) {
+        this.holds = holds; this.seats = seats; this.clock = clock; this.events = events; this.seatEvents = seatEvents;
     }
 
     /** Expires at most {@code limit} holds in one transaction. @return how many holds were expired */
@@ -62,10 +64,13 @@ public class ExpireHoldsJob {
         if (due.isEmpty()) return 0;
         Instant now = clock.now();
         List<Hold> expired = due.stream().filter(h -> h.expire(now)).toList();   // the domain re-checks each one
-        Map<UUID, List<String>> released = seats.releaseSeatsOfHolds(expired.stream().map(Hold::id).toList());
+        Map<UUID, List<SeatVersion>> released = seats.releaseSeatsOfHolds(expired.stream().map(Hold::id).toList());
         holds.saveStatuses(expired);
-        expired.forEach(h -> events.publish(new HoldExpired(h.id(), h.showId(), h.userId(), now,
-                released.getOrDefault(h.id(), List.of()))));
+        expired.forEach(h -> {
+            List<SeatVersion> freed = released.getOrDefault(h.id(), List.of());
+            seatEvents.released(h.showId(), freed);
+            events.publish(new HoldExpired(h.id(), h.showId(), h.userId(), now, freed.stream().map(SeatVersion::seatCode).toList()));
+        });
         return expired.size();
     }
 }

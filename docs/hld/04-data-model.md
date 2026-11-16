@@ -185,7 +185,8 @@ erDiagram
 | `queue:{showId}` | ZSET (score = arrival ts) | sale duration | Waiting-room FIFO |
 | `active:{showId}` | SET | — (members removed on exit/timeout) | Admitted sessions count |
 | `admission:{showId}:{userId}` | STRING (token) | 10 min | Token for polling clients |
-| `seats:{showId:section}` | HASH seat → state | — | Availability cache / fast reject |
+| `seatstate:{showId}` *(P2.3)* | HASH seat → `version\|A/H/B\|expiryMs` | — | Seat-map cache and fast-reject filter (P2.4); writes are version-guarded so events can arrive in any order |
+| `seatstate:{showId}:ready` *(P2.3)* | STRING | — | Set after a full warm-up; readers ignore a show without it, so a half-loaded hash is never served |
 | `rl:user:{userId}`, `rl:ip:{ip}` | HASH (tokens, ts) | 2× refill window | Token bucket |
 
 Braces (`{…}`) are Redis Cluster hash tags: all keys of one show/section land in the same slot so Lua scripts touching them stay atomic (P7.2).

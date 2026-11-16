@@ -36,9 +36,10 @@ public class ConfirmHoldUseCase {
     private final ShowSeatStore seats;
     private final DatabaseClock clock;
     private final HoldViews views;
+    private final SeatEvents events;
 
-    ConfirmHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views) {
-        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views;
+    ConfirmHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views, SeatEvents events) {
+        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views; this.events = events;
     }
 
     @Transactional
@@ -47,8 +48,10 @@ public class ConfirmHoldUseCase {
         Instant now = clock.now();
         try {
             if (hold.confirm(now)) {
-                if (seats.bookSeatsOf(holdId) != hold.seatCodes().size()) throw new HoldExpiredException(holdId);
+                var booked = seats.bookSeatsOf(holdId);
+                if (booked.size() != hold.seatCodes().size()) throw new HoldExpiredException(holdId);
                 holds.saveStatus(hold);
+                events.booked(hold.showId(), booked);
             }
         } catch (HoldExpiredException expired) {
             throw new HoldConflictException(Reason.HOLD_EXPIRED, expired.getMessage());

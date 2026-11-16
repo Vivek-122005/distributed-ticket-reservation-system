@@ -11,6 +11,7 @@ import com.vivek.ticketreservation.inventory.application.port.HoldStore;
 import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy;
 import com.vivek.ticketreservation.inventory.application.port.SeatLockingStrategy.ClaimedSeat;
 import com.vivek.ticketreservation.inventory.application.port.ShowStore;
+import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore.SeatVersion;
 import com.vivek.ticketreservation.inventory.domain.Hold;
 import com.vivek.ticketreservation.inventory.domain.Show;
 import org.springframework.stereotype.Service;
@@ -34,9 +35,10 @@ public class CreateHoldUseCase {
     private final ShowStore shows;
     private final SeatLockingStrategy locking;
     private final HoldStore holds;
+    private final SeatEvents events;
 
-    public CreateHoldUseCase(ShowStore shows, SeatLockingStrategy locking, HoldStore holds) {
-        this.shows = shows; this.locking = locking; this.holds = holds;
+    public CreateHoldUseCase(ShowStore shows, SeatLockingStrategy locking, HoldStore holds, SeatEvents events) {
+        this.shows = shows; this.locking = locking; this.holds = holds; this.events = events;
     }
 
     @Transactional
@@ -53,6 +55,7 @@ public class CreateHoldUseCase {
         Hold hold = holds.createHeld(UUID.randomUUID(), command.showId(), command.userId(), normalized, HOLD_DURATION);
         List<ClaimedSeat> claimed = locking.claim(command.showId(), normalized, hold.id(), command.userId(), hold.expiresAt());
         if (claimed.size() != normalized.size()) throw new SeatUnavailableException();
+        events.held(command.showId(), claimed.stream().map(c -> new SeatVersion(c.seatCode(), c.version())).toList(), hold.expiresAt());
 
         List<HeldSeat> held = claimed.stream()
                 .map(seat -> new HeldSeat(seat.seatCode(), seat.priceMinor()))

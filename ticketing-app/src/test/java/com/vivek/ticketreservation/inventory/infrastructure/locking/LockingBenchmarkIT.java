@@ -66,6 +66,7 @@ class LockingBenchmarkIT {
     @Autowired ShowStore shows;
     @Autowired HoldStore holds;
     @Autowired TransactionTemplate tx;
+    @Autowired com.vivek.ticketreservation.inventory.application.SeatEvents seatEvents;
     @Autowired @Qualifier("redis") GenericContainer<?> redisContainer;
 
     private final List<String> report = new ArrayList<>();
@@ -161,7 +162,7 @@ class LockingBenchmarkIT {
 
     private Run runOnce(Strategy strategy, Scenario scenario) throws Exception {
         reset();
-        CreateHoldUseCase useCase = new CreateHoldUseCase(shows, build(strategy), holds);
+        CreateHoldUseCase useCase = new CreateHoldUseCase(shows, build(strategy), holds, seatEvents);
         long start = System.nanoTime();
         List<Outcome<Double>> outcomes = Contention.race(scenario.attempts(), i -> {
             long t0 = System.nanoTime();
@@ -199,7 +200,7 @@ class LockingBenchmarkIT {
     }
 
     private Run runOnceWithoutReset(Strategy strategy, Scenario scenario) throws Exception {
-        CreateHoldUseCase useCase = new CreateHoldUseCase(shows, build(strategy), holds);
+        CreateHoldUseCase useCase = new CreateHoldUseCase(shows, build(strategy), holds, seatEvents);
         List<Outcome<Double>> outcomes = Contention.race(scenario.attempts(), i -> {
             long t0 = System.nanoTime();
             try {

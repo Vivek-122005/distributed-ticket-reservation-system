@@ -59,9 +59,9 @@ final class SeatRows {
                    SET status = 'HELD', hold_id = :holdId, held_by_user_id = :userId,
                        hold_expires_at = :expiresAt, version = version + 1 %s
                  WHERE id = ANY(:ids) %s
-                RETURNING seat_code, price_minor
+                RETURNING seat_code, price_minor, version
                 """.formatted(extraParams.hasValue("token") ? ", lock_fence = :token" : "", extraCondition),
-                params, (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor")));
+                params, (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor"), rs.getLong("version")));
     }
 
     /** Highest fencing token ever written for this show (0 if none): the floor for a re-created counter. */
@@ -73,8 +73,8 @@ final class SeatRows {
 
     /** Seats currently owned by this hold (used to report what an optimistic retry loop ended with). */
     List<ClaimedSeat> ownedBy(UUID holdId) {
-        return jdbc.query("SELECT seat_code, price_minor FROM inventory.show_seats WHERE hold_id = :holdId AND status = 'HELD'",
+        return jdbc.query("SELECT seat_code, price_minor, version FROM inventory.show_seats WHERE hold_id = :holdId AND status = 'HELD'",
                 new MapSqlParameterSource("holdId", holdId),
-                (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor")));
+                (rs, i) -> new ClaimedSeat(rs.getString("seat_code"), rs.getLong("price_minor"), rs.getLong("version")));
     }
 }

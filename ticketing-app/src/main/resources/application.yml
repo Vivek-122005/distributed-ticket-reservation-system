@@ -9,6 +9,9 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Fail fast: Redis is an optimisation, never worth waiting for (ADR 003).
+      timeout: ${REDIS_TIMEOUT:250ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:250ms}
   flyway:
     enabled: true
     # One folder per module. Tables live in per-module schemas (inventory.*, from V2); the shared
@@ -21,6 +24,10 @@ inventory:
     interval: ${EXPIRY_INTERVAL:5s}
     batch-size: 500
     max-batches: 20
+  seat-cache:
+    # P2.3: seat maps from Redis, kept current from SeatsChanged events; falls back to Postgres.
+    enabled: ${SEAT_CACHE_ENABLED:true}
+    update-queue: 10000
   locking:
     # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
     strategy: ${LOCKING_STRATEGY:conditional-update}

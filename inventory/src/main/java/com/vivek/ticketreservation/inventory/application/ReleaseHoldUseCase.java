@@ -8,6 +8,7 @@ import com.vivek.ticketreservation.inventory.application.port.DatabaseClock;
 import com.vivek.ticketreservation.inventory.application.port.HoldStore;
 import com.vivek.ticketreservation.inventory.application.port.InventoryEventPublisher;
 import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore;
+import com.vivek.ticketreservation.inventory.application.port.ShowSeatStore.SeatVersion;
 import com.vivek.ticketreservation.inventory.domain.Hold;
 import com.vivek.ticketreservation.inventory.domain.IllegalStateTransitionException;
 import com.vivek.ticketreservation.inventory.domain.event.HoldExpired;
@@ -35,9 +36,11 @@ public class ReleaseHoldUseCase {
     private final DatabaseClock clock;
     private final HoldViews views;
     private final InventoryEventPublisher events;
+    private final SeatEvents seatEvents;
 
-    ReleaseHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views, InventoryEventPublisher events) {
-        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views; this.events = events;
+    ReleaseHoldUseCase(HoldStore holds, ShowSeatStore seats, DatabaseClock clock, HoldViews views,
+                       InventoryEventPublisher events, SeatEvents seatEvents) {
+        this.holds = holds; this.seats = seats; this.clock = clock; this.views = views; this.events = events; this.seatEvents = seatEvents;
     }
 
     @Transactional
@@ -45,14 +48,14 @@ public class ReleaseHoldUseCase {
         Hold hold = holds.lock(holdId).filter(h -> h.belongsTo(userId)).orElseThrow(() -> new HoldNotFoundException(holdId));
         Instant now = clock.now();
         try {
-            if (hold.expire(now)) {
+            boolean expired = hold.expire(now);
+            if (expired || hold.release()) {
+                List<SeatVersion> released = seats.releaseSeatsOfHolds(List.of(holdId)).getOrDefault(holdId, List.of());
+                holds.saveStatus(hold);
+                seatEvents.released(hold.showId(), released);
                 // Same outcome as the expiry worker, so the same event: whoever records an expiry announces it.
-                List<String> released = seats.releaseSeatsOfHolds(List.of(holdId)).getOrDefault(holdId, List.of());
-                holds.saveStatus(hold);
-                events.publish(new HoldExpired(hold.id(), hold.showId(), hold.userId(), now, released));
-            } else if (hold.release()) {
-                seats.releaseSeatsOf(holdId);
-                holds.saveStatus(hold);
+                if (expired) events.publish(new HoldExpired(hold.id(), hold.showId(), hold.userId(), now,
+                        released.stream().map(SeatVersion::seatCode).toList()));
             }
         } catch (IllegalStateTransitionException confirmed) {
             throw new HoldConflictException(Reason.HOLD_ALREADY_CONFIRMED, "Confirmed holds cannot be released");
