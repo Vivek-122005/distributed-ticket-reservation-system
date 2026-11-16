@@ -12,8 +12,8 @@ info:
     extracted into `inventory-service` (P7.8). Catalog reads and the seat map are public.
 
     **Implementation status** is marked per operation with `x-plan-part` (see docs/PROJECT_PLAN.md).
-    Today hold creation exists at `POST /shows/{showId}/holds` (P1.0 + P1.1) with the full
-    `Hold` response (per-seat prices, total, currency).
+    Implemented today: the hold lifecycle (create P1.0–P1.2, get / confirm / release P1.4). Every
+    hold operation checks ownership via `X-User-Id`; another user's hold answers 404.
 
     **Idempotency:** confirm and release are naturally idempotent (repeating them returns the same
     result). Hold creation is protected upstream by the booking API's `Idempotency-Key`.
@@ -149,7 +149,7 @@ paths:
       tags: [Holds]
       operationId: getHold
       summary: Get a hold
-      x-plan-part: P1.4
+      x-plan-part: P1.4 (implemented)
       parameters:
         - $ref: '#/components/parameters/HoldId'
         - $ref: '#/components/parameters/UserId'
@@ -166,8 +166,10 @@ paths:
       summary: Release a hold (seats return to AVAILABLE)
       description: |
         Used for booking cancellation and saga compensation (payment declined). Idempotent:
-        releasing an already released or expired hold returns 200 with its current state.
-      x-plan-part: P1.4
+        releasing an already released or expired hold returns 200 with its current state. A hold
+        that is past its expiry is recorded as `EXPIRED` (not `RELEASED`). Only seats this hold still
+        owns are freed; a seat someone else re-held after expiry is left alone.
+      x-plan-part: P1.4 (implemented)
       parameters:
         - $ref: '#/components/parameters/HoldId'
         - $ref: '#/components/parameters/UserId'
@@ -198,7 +200,7 @@ paths:
         Called by the booking saga after payment capture. Succeeds only if the hold is still `HELD`
         and not expired (checked against the database clock). Idempotent: confirming an already
         confirmed hold returns 200.
-      x-plan-part: P1.4
+      x-plan-part: P1.4 (implemented)
       parameters:
         - $ref: '#/components/parameters/HoldId'
         - $ref: '#/components/parameters/UserId'
@@ -210,7 +212,10 @@ paths:
               schema: { $ref: '#/components/schemas/Hold' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Hold expired or was released before confirmation. Caller must start the refund path.
+          description: |
+            `HOLD_EXPIRED`: the hold expired (or lost a seat to a re-hold after expiry) before
+            confirmation; nothing was booked and the caller must start the refund path.
+            `ILLEGAL_STATE_TRANSITION`: the hold was released before confirmation.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiError' }

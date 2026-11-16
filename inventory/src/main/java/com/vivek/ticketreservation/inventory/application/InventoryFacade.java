@@ -5,6 +5,8 @@ import com.vivek.ticketreservation.inventory.api.HoldResult;
 import com.vivek.ticketreservation.inventory.api.InventoryApi;
 import org.springframework.stereotype.Component;
 
+import java.util.UUID;
+
 /**
  * Single entry point of the inventory module; delegates each operation to its own use case.
  *
@@ -13,9 +15,17 @@ import org.springframework.stereotype.Component;
 @Component
 class InventoryFacade implements InventoryApi {
     private final CreateHoldUseCase createHold;
+    private final ConfirmHoldUseCase confirmHold;
+    private final ReleaseHoldUseCase releaseHold;
+    private final GetHoldUseCase getHold;
 
-    InventoryFacade(CreateHoldUseCase createHold) { this.createHold = createHold; }
+    InventoryFacade(CreateHoldUseCase createHold, ConfirmHoldUseCase confirmHold,
+                    ReleaseHoldUseCase releaseHold, GetHoldUseCase getHold) {
+        this.createHold = createHold; this.confirmHold = confirmHold; this.releaseHold = releaseHold; this.getHold = getHold;
+    }
 
-    @Override
-    public HoldResult hold(HoldCommand command) { return createHold.execute(command); }
+    @Override public HoldResult hold(HoldCommand command) { return createHold.execute(command); }
+    @Override public HoldResult confirm(UUID holdId, UUID userId) { return confirmHold.execute(holdId, userId); }
+    @Override public HoldResult release(UUID holdId, UUID userId) { return releaseHold.execute(holdId, userId); }
+    @Override public HoldResult get(UUID holdId, UUID userId) { return getHold.execute(holdId, userId); }
 }

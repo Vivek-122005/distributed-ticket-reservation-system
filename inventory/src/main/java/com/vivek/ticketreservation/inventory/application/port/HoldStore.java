@@ -3,6 +3,7 @@ package com.vivek.ticketreservation.inventory.application.port;
 import com.vivek.ticketreservation.inventory.domain.Hold;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,8 +15,17 @@ import java.util.UUID;
  */
 public interface HoldStore {
 
-    /** Inserts a HELD hold expiring {@code ttl} after the database's {@code now()}. */
-    Hold createHeld(UUID id, UUID showId, UUID userId, Duration ttl);
+    /** Inserts a HELD hold for these seats, expiring {@code ttl} after the database's {@code now()}. */
+    Hold createHeld(UUID id, UUID showId, UUID userId, List<String> seatCodes, Duration ttl);
 
     Optional<Hold> find(UUID holdId);
+
+    /**
+     * Loads the hold and locks its row until the transaction ends ({@code SELECT … FOR UPDATE}), so
+     * confirm, release and expiry of the same hold run one after another, never interleaved.
+     */
+    Optional<Hold> lock(UUID holdId);
+
+    /** Writes the hold's current status. */
+    void saveStatus(Hold hold);
 }

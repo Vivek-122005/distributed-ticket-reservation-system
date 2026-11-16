@@ -155,13 +155,25 @@ classDiagram
     class RedisLuaStrategy
     class HoldStore {
       <<interface>>
-      +createHeld(id, showId, userId, ttl) Hold
+      +createHeld(id, showId, userId, seatCodes, ttl) Hold
       +find(holdId) Optional~Hold~
+      +lock(holdId) Optional~Hold~
+      +saveStatus(Hold)
       +findExpired(limit) List~Hold~
     }
     class ShowStore {
       <<interface>>
       +find(showId) Optional~Show~
+    }
+    class ShowSeatStore {
+      <<interface>>
+      +bookSeatsOf(holdId) int
+      +releaseSeatsOf(holdId) int
+      +prices(showId, seatCodes) List~PricedSeat~
+    }
+    class DatabaseClock {
+      <<interface>>
+      +now() Instant
     }
     InventoryApi <|.. InventoryFacade
     InventoryFacade --> CreateHoldUseCase
@@ -177,6 +189,12 @@ classDiagram
     HoldStore <|.. JdbcHoldStore
     ShowStore <|.. JdbcShowStore
     CreateHoldUseCase --> ShowStore
+    ConfirmHoldUseCase --> HoldStore
+    ConfirmHoldUseCase --> ShowSeatStore
+    ConfirmHoldUseCase --> DatabaseClock
+    ReleaseHoldUseCase --> ShowSeatStore
+    ShowSeatStore <|.. JdbcShowSeatStore
+    DatabaseClock <|.. JdbcDatabaseClock
     ExpireHoldsJob --> HoldStore
 ```
 

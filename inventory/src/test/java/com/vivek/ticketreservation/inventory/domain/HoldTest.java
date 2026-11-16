@@ -3,6 +3,7 @@ package com.vivek.ticketreservation.inventory.domain;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,7 +17,7 @@ class HoldTest {
     private static final Instant AFTER = EXPIRES.plusSeconds(1);
 
     private static Hold hold(HoldStatus status) {
-        return new Hold(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), status, EXPIRES);
+        return new Hold(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), status, EXPIRES, List.of("A1"));
     }
 
     @Test
@@ -50,7 +51,7 @@ class HoldTest {
     @Test
     void releasedOrExpiredHoldCannotBeConfirmed() {
         assertThatThrownBy(() -> hold(HoldStatus.RELEASED).confirm(BEFORE)).isInstanceOf(IllegalStateTransitionException.class);
-        assertThatThrownBy(() -> hold(HoldStatus.EXPIRED).confirm(BEFORE)).isInstanceOf(IllegalStateTransitionException.class);
+        assertThatThrownBy(() -> hold(HoldStatus.EXPIRED).confirm(BEFORE)).isInstanceOf(HoldExpiredException.class);
     }
 
     @Test
@@ -72,9 +73,16 @@ class HoldTest {
     }
 
     @Test
+    void effectiveStatusReportsLazyExpiry() {
+        assertThat(hold(HoldStatus.HELD).effectiveStatus(BEFORE)).isEqualTo(HoldStatus.HELD);
+        assertThat(hold(HoldStatus.HELD).effectiveStatus(AFTER)).isEqualTo(HoldStatus.EXPIRED);
+        assertThat(hold(HoldStatus.CONFIRMED).effectiveStatus(AFTER)).isEqualTo(HoldStatus.CONFIRMED);
+    }
+
+    @Test
     void ownership() {
         UUID user = UUID.randomUUID();
-        Hold hold = new Hold(UUID.randomUUID(), UUID.randomUUID(), user, HoldStatus.HELD, EXPIRES);
+        Hold hold = new Hold(UUID.randomUUID(), UUID.randomUUID(), user, HoldStatus.HELD, EXPIRES, List.of("A1"));
         assertThat(hold.belongsTo(user)).isTrue();
         assertThat(hold.belongsTo(UUID.randomUUID())).isFalse();
     }

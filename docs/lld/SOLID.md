@@ -20,7 +20,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `ConditionalUpdateStrategy` | Only the hot seat-claim statement | ✅ P1.1 |
 | `JdbcHoldStore`, `JdbcShowStore` | Only row ↔ aggregate mapping for one table each | ✅ P1.3 |
 | `Hold`, `ShowSeat`, `Show` | Only their own state rules; no persistence or HTTP | ✅ P1.3 |
-| Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService` | ⬜ P1.3–P1.4, P2.1 |
+| Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`; `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService`; the shared result mapping lives once in `HoldViews` | ✅ P1.4; job ⬜ P2.1 |
 | `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
 | `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
 
@@ -54,7 +54,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 
 | Where | How it is applied | Status |
 |---|---|---|
-| `InventoryApi` (booking's view) vs `CatalogAdminApi` (admin) | Booking sees `hold / confirm / release` only; venue and show creation is a separate interface | ⬜ P0.14, P6.9 |
+| `InventoryApi` (booking's view) vs `CatalogAdminApi` (admin) | Booking sees `hold / confirm / release / get` only; venue and show creation is a separate interface | ✅ `InventoryApi` P1.4; `CatalogAdminApi` ⬜ P6.9 |
 | `PaymentApi` vs `PaymentGateway` | Booking uses `PaymentApi` (create intent, refund); only the payment module sees the PSP-level `PaymentGateway` | ⬜ P4.1 |
 | Read vs write ports (`SeatMapQuery` vs `HoldCommands`) | The seat-map read path can move to Redis or a replica without touching the write path | ⬜ P1.5, P2.3 |
 

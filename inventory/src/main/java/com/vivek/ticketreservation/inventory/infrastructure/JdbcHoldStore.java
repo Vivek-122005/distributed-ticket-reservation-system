@@ -9,6 +9,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,23 +25,25 @@ import java.util.UUID;
 @Component
 class JdbcHoldStore implements HoldStore {
 
-    private static final String COLUMNS = "id, show_id, user_id, status, expires_at";
+    private static final String COLUMNS = "id, show_id, user_id, status, expires_at, seat_codes";
     private static final RowMapper<Hold> HOLD = (rs, i) -> new Hold(
             rs.getObject("id", UUID.class), rs.getObject("show_id", UUID.class), rs.getObject("user_id", UUID.class),
-            HoldStatus.valueOf(rs.getString("status")), rs.getTimestamp("expires_at").toInstant());
+            HoldStatus.valueOf(rs.getString("status")), rs.getTimestamp("expires_at").toInstant(),
+            Arrays.asList((String[]) rs.getArray("seat_codes").getArray()));
 
     private final NamedParameterJdbcTemplate jdbc;
 
     JdbcHoldStore(NamedParameterJdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     @Override
-    public Hold createHeld(UUID id, UUID showId, UUID userId, Duration ttl) {
+    public Hold createHeld(UUID id, UUID showId, UUID userId, List<String> seatCodes, Duration ttl) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("id", id).addValue("showId", showId).addValue("userId", userId)
+                .addValue("seatCodes", seatCodes.toArray(String[]::new))
                 .addValue("ttlSeconds", (double) ttl.toSeconds());
         return jdbc.queryForObject("""
-                INSERT INTO inventory.holds (id, show_id, user_id, status, expires_at)
-                VALUES (:id, :showId, :userId, 'HELD', now() + make_interval(secs => :ttlSeconds))
+                INSERT INTO inventory.holds (id, show_id, user_id, status, expires_at, seat_codes)
+                VALUES (:id, :showId, :userId, 'HELD', now() + make_interval(secs => :ttlSeconds), :seatCodes)
                 RETURNING %s
                 """.formatted(COLUMNS), params, HOLD);
     }
@@ -48,5 +52,17 @@ class JdbcHoldStore implements HoldStore {
     public Optional<Hold> find(UUID holdId) {
         return jdbc.query("SELECT " + COLUMNS + " FROM inventory.holds WHERE id = :id",
                 new MapSqlParameterSource("id", holdId), HOLD).stream().findFirst();
+    }
+
+    @Override
+    public Optional<Hold> lock(UUID holdId) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM inventory.holds WHERE id = :id FOR UPDATE",
+                new MapSqlParameterSource("id", holdId), HOLD).stream().findFirst();
+    }
+
+    @Override
+    public void saveStatus(Hold hold) {
+        jdbc.update("UPDATE inventory.holds SET status = :status WHERE id = :id",
+                new MapSqlParameterSource("status", hold.status().name()).addValue("id", hold.id()));
     }
 }

@@ -357,3 +357,53 @@ A running record of **what was built, in which phase, in which part of the syste
   - **ArchUnit rules bite:** the planted booking violation still fails.
   - **Test isolation:** the test-data reset now also restores prices, so one failing test can't leak a modified price into others (seen once while fixing a SQL typo).
 - **ADR:** none
+
+### P1.4 — Confirm, release and get hold
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **`inventory.api`:** `InventoryApi` (+ `confirm`, `release`, `get`), `HoldState`, `HoldResult` (+ status), `HoldNotFoundException`, `HoldConflictException`.
+  - **`inventory.application`:** `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`, `HoldViews`, `InventoryFacade`.
+  - **Ports:** `ShowSeatStore`, `DatabaseClock`, `HoldStore` (+ `lock`, `saveStatus`, seat codes).
+  - **JDBC adapters:** `JdbcShowSeatStore`, `JdbcDatabaseClock`, `JdbcHoldStore`.
+  - **Domain:** `Hold` (+ `seatCodes`, `effectiveStatus`; expired holds can't be confirmed).
+  - **Other code:** controller, exception handler, `V4__hold_seat_codes.sql`.
+  - **Tests and docs:** `HoldLifecycleIT`, `HoldTest`; API spec, plan, registries, class diagram.
+- **What was built:**
+  - **Endpoints:** `GET /holds/{id}`, `POST /holds/{id}/confirm`, `DELETE /holds/{id}` over HTTP, and the same three on the `InventoryApi` port that the booking saga will call in-process (P3.3).
+  - **Common steps:** every operation locks the hold row (`SELECT … FOR UPDATE`), checks ownership (another user's hold → 404, so ids can't be probed) and lets the `Hold` aggregate decide the transition using the database clock.
+  - **Confirm:** books seats `WHERE hold_id = :hold AND status = 'HELD'`. If fewer seats are booked than the hold has, it fails with `HOLD_EXPIRED` and rolls back.
+  - **Release:** frees only the seats the hold still owns. A hold already past expiry is recorded as `EXPIRED`.
+  - **Repeats:** a repeat confirm or release returns the current state with 200.
+  - **V4:** stores the hold's `seat_codes`, with a 1–8 `CHECK` (BR-01). A hold can then report its seats and prices even after they were released or re-held.
+- **Why this approach:**
+  - **Hold row lock first:** confirm (from a payment webhook), release (from a cancel) and the expiry worker can race on one hold. Locking the hold row serialises them, and the aggregate then sees a stable state. The claim path of *other* holds never locks this row, so it adds no contention on the hot path and can't form a lock cycle.
+  - **Count check on confirm, the key race:**
+    1. Our hold is checked as live at T.
+    2. It expires at T+ε.
+    3. Another user lazily re-holds one of its seats (P1.2).
+    
+    Booking conditionally then returns fewer rows than the hold has seats, and we roll back with `HOLD_EXPIRED`. Invariant: a `CONFIRMED` hold owns **every** one of its seats; there is never a half-booked hold. The saga takes the refund path (FR-07).
+  - **Release doesn't check the count:** seats re-held by someone else after expiry must stay theirs. Releasing "what is still mine" is the correct, idempotent meaning.
+  - **Expired-but-`HELD` → `EXPIRED` on release, not `RELEASED`:** the history then tells the truth (it ran out, it wasn't cancelled). `GET` reports the same `effectiveStatus` before the worker runs.
+  - **Idempotency without a key table:** the state machine itself makes repeats safe (`CONFIRMED` + confirm = no-op). Saga retries and duplicate webhooks need nothing more here. The `Idempotency-Key` table (P3.4) is for *creating* bookings.
+  - **404 for another user's hold:** the same answer as "doesn't exist" avoids leaking which hold ids are valid.
+  - **Seat codes on the hold row instead of a `hold_seats` table:** the codes are written in the same `INSERT` (no extra round trip on the hot path). Prices are read from `show_seats` by code, because the price is frozen per show seat, not per holder.
+- **Alternatives considered:**
+  - **Optimistic `version` on holds instead of `FOR UPDATE`:** this works too, but conflicting confirm/release would then surface as retries, and lock waits here are rare and short.
+  - **`hold_seats` join table:** more normalised, but one extra insert per seat in the hottest transaction.
+  - **Confirm extends or refreshes the hold:** rejected by BR-02 (holds are never extended) and by the agreed "no hold extension while payment is `UNKNOWN`" rule (plan §4.4b).
+  - **Marking the hold `EXPIRED` when confirm fails:** not possible in the same transaction, because the failure rolls back. The expiry worker (P2.1) does it.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS. Surefire: 46 domain + 11 architecture tests. Failsafe: 29 ITs.
+  - **`HoldLifecycleIT` (9 tests over HTTP):**
+    - confirm books seats and is idempotent;
+    - release frees seats, is idempotent and still reports its seats;
+    - confirmed → release → 409 `HOLD_ALREADY_CONFIRMED`;
+    - released → confirm → 409 `ILLEGAL_STATE_TRANSITION`;
+    - expired → confirm → 409 `HOLD_EXPIRED`, with nothing booked;
+    - **the re-held-seat race** → 409 `HOLD_EXPIRED` and no partial booking;
+    - releasing an expired hold records `EXPIRED` and leaves the other user's seat alone;
+    - `GET` shows lazy expiry;
+    - another user gets 404 on all three operations, and the seat is unchanged.
+  - **OpenAPI spec:** still validates.
+- **ADR:** none

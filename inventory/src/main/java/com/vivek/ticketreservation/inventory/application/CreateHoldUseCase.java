@@ -2,6 +2,7 @@ package com.vivek.ticketreservation.inventory.application;
 
 import com.vivek.ticketreservation.inventory.api.HeldSeat;
 import com.vivek.ticketreservation.inventory.api.HoldCommand;
+import com.vivek.ticketreservation.inventory.api.HoldState;
 import com.vivek.ticketreservation.inventory.api.HoldResult;
 import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
@@ -49,7 +50,7 @@ public class CreateHoldUseCase {
         Show show = shows.find(command.showId()).orElseThrow(() -> new ShowNotFoundException(command.showId()));
         if (!show.isOnSale()) throw new ShowNotOnSaleException(command.showId());
 
-        Hold hold = holds.createHeld(UUID.randomUUID(), command.showId(), command.userId(), HOLD_DURATION);
+        Hold hold = holds.createHeld(UUID.randomUUID(), command.showId(), command.userId(), normalized, HOLD_DURATION);
         List<ClaimedSeat> claimed = locking.claim(command.showId(), normalized, hold.id(), command.userId(), hold.expiresAt());
         if (claimed.size() != normalized.size()) throw new SeatUnavailableException();
 
@@ -58,6 +59,6 @@ public class CreateHoldUseCase {
                 .sorted(Comparator.comparing(HeldSeat::seatCode))
                 .toList();
         long total = held.stream().mapToLong(HeldSeat::priceMinor).sum();
-        return new HoldResult(hold.id(), command.showId(), hold.expiresAt(), held, total, show.currency());
+        return new HoldResult(hold.id(), command.showId(), HoldState.HELD, hold.expiresAt(), held, total, show.currency());
     }
 }
