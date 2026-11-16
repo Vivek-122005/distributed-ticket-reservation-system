@@ -30,7 +30,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 13 | [Template Method](#13-template-method) | Behavioural (GoF) | ⬜ P5.5 | `IdempotentEventConsumer` |
 | 14 | [Observer / Publish-Subscribe](#14-observer--publish-subscribe) | Behavioural (GoF) | ⬜ P5, P5.11 | domain events → Kafka → consumers |
 | 15 | [Factory](#15-factory) | Creational (GoF) | ⬜ P5.1 | `EventEnvelopeFactory` |
-| 16 | [Builder](#16-builder) | Creational (GoF) | ⬜ P1.6 | test-data builders |
+| 16 | [Builder](#16-builder) | Creational (GoF) | ⬜ P3.6 (not needed in P1.6) | test-data builders |
 | 17 | [Chain of Responsibility](#17-chain-of-responsibility) | Behavioural (GoF) | ⬜ P6.1–P6.5 | gateway filters |
 | 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | ⬜ P7.8 | HTTP adapters (Resilience4j) |
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
@@ -164,7 +164,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** constructing envelopes by hand at each call site. Fields get forgotten.
 
 ## 16. Builder
-- **Status:** ⬜ P1.6
+- **Status:** ⬜ moved to P3.6. P1.6 didn't need it: every contention request is a one-line `HoldCommand`, and a builder would only add indirection. Bookings (P3), with seats, prices, payment and idempotency key, are where test data gets wide enough to justify one.
 - **Plan:** test builders such as `ShowFixture.withSeats(100)` and `holdRequest().seats("A1","A2")`.
 - **Why:** concurrency tests set up many rows; builders keep tests short and intention-revealing.
 - **Alternative:** SQL fixture files. Fine for static data, poor for per-test variations.

@@ -43,7 +43,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 
 | Where | How it is applied | Status |
 |---|---|---|
-| All `SeatLockingStrategy` implementations | One shared contract test suite (exactly-N winners, no partial holds) runs against **every** strategy | ⬜ P1.6–P1.7 |
+| All `SeatLockingStrategy` implementations | One shared contract test suite (exactly-N winners, no partial holds, no deadlocks) runs against **every** strategy. The suite exists (`SeatContentionIT`, P1.6) and runs against `ConditionalUpdateStrategy`; P1.7 parameterises it over all strategies | 🔨 P1.6 ✅, P1.7 ⬜ |
 | `MockPaymentGateway` / `SandboxPaymentGateway` | Same contract tests: idempotent `capture`; `fetchStatus` returns the same outcome as the original call; timeouts surface as `GatewayTimeout`, never as a fake failure | ⬜ P4.1 |
 | `InProcessInventoryAdapter` / `HttpInventoryAdapter` | Same results and error codes (`SEAT_UNAVAILABLE`, `HOLD_EXPIRED`), so extraction does not change booking behaviour | ⬜ P7.8 |
 

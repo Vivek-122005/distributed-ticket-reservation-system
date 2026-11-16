@@ -444,3 +444,40 @@ A running record of **what was built, in which phase, in which part of the syste
     - malformed id → 400 in the standard shape.
   - **OpenAPI spec:** still validates.
 - **ADR:** none
+
+### P1.6 — Concurrency test suite
+- **Date:** 2026-11-16
+- **Module / files:** `ticketing-app/src/test/.../inventory/SeatContentionIT.java`, `support/Contention.java` (race harness), `support/InventoryInvariants.java` (SQL invariant checker); plan, registries
+- **What was built:**
+  - **Six contention tests against real Postgres 16, through the `InventoryApi` port**, with a 50-connection pool:
+    - **One seat:** 500 attempts → exactly 1 winner, and the 499 losers' hold rows are rolled back.
+    - **100 seats:** 2,000 attempts → exactly 100 winners, with no seat won twice.
+    - **Overlapping multi-seat requests:** 600 random 2–4-seat requests over 12 seats, each in shuffled order (fixed seed) → every held seat belongs to a complete winning hold, and there are no deadlocks.
+    - **Reversed pairs:** 400 requests of `A1+A2` vs `A2+A1` (the textbook deadlock) → exactly 1 winner, no deadlock.
+    - **Expired-seat stampede:** 300 attempts on a seat whose hold just expired → exactly 1 winner.
+    - **Confirm vs release:** confirm racing release on 40 holds → exactly one of the two wins for every hold, and the booked seats equal the confirmed holds.
+  - **`Contention.race`:** every attempt runs on a virtual thread and waits on one start gate, so the attempts hit the database together. It records each outcome or exception.
+  - **`InventoryInvariants.assertHold`:** three SQL checks after every test:
+    - every live hold owns *all* its seats;
+    - every confirmed hold owns all its seats as `BOOKED`;
+    - no seat is owned by a hold that doesn't list it or is in the wrong state.
+    
+    P9.2's load-test checker will reuse these queries.
+  - **Requirement-named tests:** test names carry their requirement IDs (`fr03_…`, `nfr01_…`), as promised in the SRS traceability section.
+- **Why this approach:**
+  - **Unexpected exceptions fail the test:** the only allowed failure is the business outcome (`SeatUnavailableException`, or `HoldConflictException` in the confirm/release race). A deadlock, timeout or constraint violation fails the test, so "no deadlocks" is asserted, not assumed.
+  - **Pool of 50, not the default 10:** more transactions are truly concurrent at the database, which makes lock-ordering bugs much more likely to show. The separate pool size gives this class its own Spring context and container, which costs about 3 s.
+  - **Calling the port, not HTTP:** locking happens in the database; going through Tomcat only adds noise and time. HTTP behaviour is covered by the other ITs.
+  - **Fixed random seed:** a failure is reproducible.
+  - **Mutation check:** a test suite that never fails proves nothing, so the claim was broken on purpose twice:
+    1. **Status condition removed (seats can be stolen):** 5 of 6 tests fail.
+    2. **Lock order randomised:** the reversed-pairs test fails, and Postgres logs `deadlock detected`.
+    
+    Both mutations were reverted.
+- **Alternatives considered:**
+  - **JMH or k6 for this part:** those measure throughput (P1.8, P9). This part is about *correctness* under contention, and belongs in `mvn verify` so every commit is checked.
+  - **Java `synchronized` or mocks to simulate contention:** they would test Java, not Postgres row locking, which is the thing that must be right.
+  - **jcstress:** made for JVM memory-model tests, not database transactions.
+  - **Repeating each test many times:** slower CI. The mutation runs showed the current sizes already expose both bug classes.
+- **How it was verified:** `mvn verify`: BUILD SUCCESS, 57 unit/architecture tests and 43 ITs. `SeatContentionIT` (6 tests) runs in about 3 s. The two mutation runs are described above.
+- **ADR:** none
