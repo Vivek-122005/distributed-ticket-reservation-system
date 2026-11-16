@@ -477,10 +477,10 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 | Part | Task | Details / why |
 |---|---|---|
-| P1.0 ⬜ | Show-based schema *(rev)* | Flyway V2 in the `inventory` schema: `venues`, `venue_sections`, `seats`, `events`, `shows`, `show_seats`, `holds` (with `show_id`); demo venue + show with 100 seats; drop `seat_inventory`. Hold code switches to `show_seats`. |
+| P1.0 ✅ | Show-based schema *(rev)* | Flyway V2 in the `inventory` schema: `venues`, `venue_sections`, `seats`, `events`, `shows`, `show_seats`, `holds` (with `show_id`); demo venue + show with 100 seats; drop `seat_inventory`. Hold code switches to `show_seats`; `POST /shows/{showId}/holds` with `SHOW_NOT_FOUND` / `SHOW_NOT_ON_SALE`; stored hold status renamed `ACTIVE` → `HELD` (pulled forward from P1.3 because the table was new). |
 | P1.1 🔨 | Atomic multi-seat hold | Already: conditional `UPDATE … WHERE status='AVAILABLE'` per seat in one transaction, seats sorted to avoid deadlocks. Add: single batched `UPDATE … WHERE seat_code = ANY(?)` and compare affected-row count to requested count (one round trip instead of N). |
 | P1.2 ⬜ | Lazy expiry in claim query | `WHERE status='AVAILABLE' OR (status='HELD' AND hold_expires_at < now())` — correctness no longer depends on the expiry worker being on time. |
-| P1.3 ⬜ | Domain state machine | `SeatStatus`/`HoldStatus` transitions in the domain layer; illegal transitions throw. Unit-tested without DB. Align stored `ACTIVE` with API `HELD`; add `timestamp` to `ApiError`. |
+| P1.3 ⬜ | Domain state machine | `SeatStatus`/`HoldStatus` transitions in the domain layer; illegal transitions throw. Unit-tested without DB. Add `timestamp` to `ApiError` (the `ACTIVE`/`HELD` alignment was done in P1.0). |
 | P1.4 ⬜ | Release hold & confirm hold APIs | `DELETE /holds/{id}`, `POST /holds/{id}/confirm`. Both conditional on `hold_id` + owner + not expired; idempotent (repeat confirm returns same result). |
 | P1.5 ⬜ | Catalog & seat map read APIs | `GET /events`, `GET /events/{id}/shows`, `GET /shows/{id}/seats`. Read path separated from write path (later cached in Redis). |
 | P1.6 ⬜ | **Concurrency test suite** | Testcontainers Postgres; 500 threads fight for 1 seat → exactly 1 winner; 2,000 threads for 100 seats → exactly 100; overlapping multi-seat requests → no partial holds. Runs in CI. |
@@ -596,7 +596,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 |---|---|---|
 | P7.1 | Add `section` to inventory | Seats grouped by section; keys become `eventId:section`. |
 | P7.2 | Section-aware routing | Kafka keys, Redis keys (`{event:section}` hash tags for Redis Cluster slots), inventory request routing. |
-| P7.3 | Postgres partitioning | `seat_inventory` LIST/HASH partitioned by event (and section for hot events); measure effect on contention and vacuum. |
+| P7.3 | Postgres partitioning | `show_seats` LIST/HASH partitioned by show (and section for hot events); measure effect on contention and vacuum. |
 | P7.4 | Connection pool & thread tuning | HikariCP sizing (`cores*2+spindles` reasoning), virtual threads, Postgres `max_connections`. |
 | P7.5 | Read/write split | Seat map reads from Redis / read replica; writes to primary only. |
 | P7.6 | Experiment report | Normal event (500 users) vs hot event (50k users), before/after partitioning. ADR 006. |

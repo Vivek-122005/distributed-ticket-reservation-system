@@ -36,7 +36,8 @@ Tests: `mvn verify` runs unit and architecture tests, then integration tests aga
 The app starts at `http://localhost:8080`.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/events/00000000-0000-0000-0000-000000000001/holds \
+# Demo show 00…0101 (Demo Concert at Demo Arena, 100 seats A1–A100), created by migration V2
+curl -X POST http://localhost:8080/api/v1/shows/00000000-0000-0000-0000-000000000101/holds \
   -H 'Content-Type: application/json' \
   -H 'X-User-Id: 11111111-1111-1111-1111-111111111111' \
   -d '{"seatCodes":["A1","A2"]}'

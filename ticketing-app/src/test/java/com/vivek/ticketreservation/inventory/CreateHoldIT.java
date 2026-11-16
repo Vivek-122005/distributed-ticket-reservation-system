@@ -17,12 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.vivek.ticketreservation.support.InventoryTestData.DEMO_EVENT;
+import static com.vivek.ticketreservation.support.InventoryTestData.DEMO_SHOW;
 import static com.vivek.ticketreservation.support.InventoryTestData.seatStatus;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * End-to-end hold behaviour over HTTP against real Postgres (FR-03).
+ * End-to-end hold behaviour over HTTP against real Postgres (FR-03, BR-03).
  * The heavy multi-threaded concurrency suite is P1.6; this covers the single-request guarantees.
  */
 @IntegrationTest
@@ -39,7 +39,7 @@ class CreateHoldIT {
         ResponseEntity<Map> response = hold(UUID.randomUUID(), "A1", "a2");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(response.getBody()).containsEntry("status", "HELD");
+        assertThat(response.getBody()).containsEntry("status", "HELD").containsEntry("showId", DEMO_SHOW.toString());
         assertThat(response.getBody().get("seatCodes")).isEqualTo(List.of("A1", "A2"));
         assertThat(seatStatus(jdbc, "A1")).isEqualTo("HELD");
         assertThat(seatStatus(jdbc, "A2")).isEqualTo("HELD");
@@ -54,7 +54,7 @@ class CreateHoldIT {
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(second.getBody()).containsEntry("code", "SEAT_UNAVAILABLE");
         assertThat(seatStatus(jdbc, "A3")).as("all-or-nothing: A3 must not stay held").isEqualTo("AVAILABLE");
-        Integer holds = jdbc.queryForObject("SELECT count(*) FROM holds", Integer.class);
+        Integer holds = jdbc.queryForObject("SELECT count(*) FROM inventory.holds", Integer.class);
         assertThat(holds).as("the failed hold row is rolled back too").isEqualTo(1);
     }
 
@@ -74,11 +74,42 @@ class CreateHoldIT {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
     }
 
+    @Test
+    void unknownShowIsNotFound() {
+        ResponseEntity<Map> response = hold(UUID.randomUUID(), UUID.randomUUID(), "A1");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).containsEntry("code", "SHOW_NOT_FOUND");
+    }
+
+    @Test
+    void showNotOnSaleHoldsNothing() {
+        InventoryTestData.setShowStatus(jdbc, "SCHEDULED");
+
+        ResponseEntity<Map> response = hold(UUID.randomUUID(), "A1");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).containsEntry("code", "SHOW_NOT_ON_SALE");
+        assertThat(seatStatus(jdbc, "A1")).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    void storedHoldStatusMatchesTheApiName() {
+        hold(UUID.randomUUID(), "A7");
+
+        String stored = jdbc.queryForObject("SELECT status FROM inventory.holds", String.class);
+        assertThat(stored).as("no ACTIVE/HELD split (SOLID.md #5)").isEqualTo("HELD");
+    }
+
     private ResponseEntity<Map> hold(UUID userId, String... seatCodes) {
+        return hold(DEMO_SHOW, userId, seatCodes);
+    }
+
+    private ResponseEntity<Map> hold(UUID showId, UUID userId, String... seatCodes) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-User-Id", userId.toString());
-        return http.postForEntity("/api/v1/events/{eventId}/holds",
-                new HttpEntity<>(Map.of("seatCodes", List.of(seatCodes)), headers), Map.class, DEMO_EVENT);
+        return http.postForEntity("/api/v1/shows/{showId}/holds",
+                new HttpEntity<>(Map.of("seatCodes", List.of(seatCodes)), headers), Map.class, showId);
     }
 }

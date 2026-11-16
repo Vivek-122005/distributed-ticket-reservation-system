@@ -11,7 +11,8 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
-    # One folder per module; per-module schemas arrive with the V2 migration (P1.0).
+    # One folder per module. Tables live in per-module schemas (inventory.*, from V2); the shared
+    # history table stays in public until booking gets its own migrations (P3.1).
     locations: classpath:db/migration/inventory
 management:
   endpoints:

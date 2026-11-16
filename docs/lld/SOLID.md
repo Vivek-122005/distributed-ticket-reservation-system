@@ -17,7 +17,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `inventory.application.InventoryFacade` | Only delegation from the module API to use cases | ✅ P0.14 |
 | `inventory.application.CreateHoldUseCase` | Only the hold use case (renamed from `InventoryApplicationService`) | ✅ P0.14 |
 | `ApiExceptionHandler` | Only exception → error-response mapping | ✅ |
-| `SeatInventoryRepository` | Only seat persistence and the claim query | ✅ |
+| `ShowSeatRepository` | Only show-seat persistence and the claim query | ✅ |
 | Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService` | ⬜ P1.3–P1.4, P2.1 |
 | `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
 | `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
@@ -82,5 +82,5 @@ Found by reviewing the bootstrap code (`inventory-service`, commit `37138c8`) ag
 | 2 | `CreateHoldUseCase` uses Spring Data repositories from `infrastructure` directly, with no port interface | DIP | P1.3: introduce `HoldStore` / `SeatClaimPort`, implemented by JPA adapters |
 | 3 | `domain.Hold` carries JPA annotations, so the domain depends on persistence | DIP | P1.3: separate the persistence entity from the domain model, or document the pragmatic exception in an ADR |
 | 4 | ~~One service class will grow to hold, confirm and release~~ | SRP | ✅ **Fixed in P0.14:** `CreateHoldUseCase` behind `InventoryFacade`; confirm/release get their own use cases in P1.4 |
-| 5 | Stored `HoldStatus.ACTIVE` vs API `HELD`: two names for one state | (consistency) | P1.3 |
+| 5 | ~~Stored `HoldStatus.ACTIVE` vs API `HELD`: two names for one state~~ | (consistency) | ✅ **Fixed in P1.0:** the new `inventory.holds` table stores `HELD` (with a `CHECK`), and `HoldStatus` uses the API names. Pulled forward because creating a new table with a known-wrong value would only need another migration in P1.3 |
 | 6 | ~~No ArchUnit rules yet, so the boundaries are convention only~~ | — | ✅ **Fixed in P0.14:** 9 rules in `ModuleBoundaryTest`, plus `ModuleBoundaryRulesBiteTest`, which proves a planted violation fails |

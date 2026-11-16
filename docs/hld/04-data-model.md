@@ -2,7 +2,7 @@
 
 One PostgreSQL instance, **one schema per service** (`inventory`, `booking`, `payment`, `notification`, …). Each service connects with its own DB user that can only access its own schema. This gives database-per-service ownership without running many Postgres containers on a laptop; splitting into separate instances later is a configuration change.
 
-> Current state: the `inventory` module's V1 migration (`inventory/src/main/resources/db/migration/inventory/`) uses the default schema with `events` + `seat_inventory`. The show-based model below replaces it in the `inventory` schema with the V2 migration (P1.0).
+> Current state: implemented by migration `V2__show_based_schema.sql` (P1.0) in the `inventory` schema, which also drops the V1 `public.events / holds / seat_inventory` demo tables. Flyway's history table stays in `public` until booking gets its own migrations (P3.1). The `CHECK` constraints marked *(P1.3)* are not in V2 yet. The planned `idx_show_seats_lookup` was not created: the `UNIQUE (show_id, seat_code)` index already serves both the claim and seat-map lookups, and a second index would only slow writes on the hottest table.
 
 ## 4.1 Inventory schema (inventory module) *(rev: Venue / Show model)*
 

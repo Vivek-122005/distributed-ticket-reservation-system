@@ -227,3 +227,34 @@ A running record of **what was built, in which phase, in which part of the syste
 - **How it was verified:** `mvn verify` with BUILD SUCCESS. Surefire ran 10 tests (ArchUnit) and failsafe 6 tests against a real Postgres 16 container, 0 failures. Manual smoke test of the packaged jar against the Compose Postgres (port 55432): Flyway applied V1, `POST /events/{id}/holds` for A99+A100 → 201, holding A100 again → 409 `SEAT_UNAVAILABLE`, `/actuator/health` → UP. GitHub CI will be confirmed by the run on this push.
 - **ADR:** none
 
+
+---
+
+## Phase 1 — Inventory & reservation engine
+
+### P1.0 — Show-based schema (Flyway V2)
+- **Date:** 2026-11-16
+- **Module / files:** `inventory/src/main/resources/db/migration/inventory/V2__show_based_schema.sql`; `inventory` code (`ShowSeatRepository`/`ShowSeatRow` renamed from `SeatInventory*`, new `ShowRow`/`ShowRepository`, `Hold`, `HoldStatus`, `HoldCommand`/`HoldResult`, `ShowNotFoundException`, `ShowNotOnSaleException`, controller, exception handler); tests (`ApplicationStartupIT`, `CreateHoldIT`, `InventoryTestData`); plan, HLD §4, API spec, README, registries
+- **What was built:**
+  - **Schema:** a new `inventory` Postgres schema with the catalog (`venues → venue_sections → seats`, `events → shows`) and the sellable inventory (`show_seats`, `holds` with `show_id`). It enforces `UNIQUE (show_id, seat_id)` (invariant 1) and `UNIQUE (show_id, seat_code)` (claim lookup), plus status `CHECK`s for every table and non-negative prices.
+  - **Demo data:** the "Demo Concert" event, plus one show at "Demo Arena" with 100 seats A1–A100 in section A at ₹1,500. Fixed ids are used for tests and the README. The show seats are generated from the venue layout the same way admin show creation will do it (P6.9).
+  - **Retiring V1:** `public.seat_inventory`, `public.holds` and `public.events` are dropped. They held only demo data.
+  - **Code:** hold creation moved to `POST /api/v1/shows/{showId}/holds`. It now checks that the show exists (`404 SHOW_NOT_FOUND`) and is `ON_SALE` (`409 SHOW_NOT_ON_SALE`, BR-03) before claiming. The response includes `showId`.
+  - **Status rename:** the stored hold status is renamed `ACTIVE` → `HELD`. This fixes SOLID deviation #5, which was planned for P1.3.
+- **Why this approach:**
+  - **Show as the unit of sale:** without `shows`, the same chair can't be sold separately for two dates. `show_seats` keeps per-seat identity per show, so the lock target is one row (HLD §4.1).
+  - **Copied columns on `show_seats` (`seat_code`, `section_code`, `price_minor`):** the hot claim query stays a single-table `UPDATE` with no join. The price is frozen when the show is created (BR-05).
+  - **Schema per module now, explicitly qualified (`inventory.show_seats`, `@Table(schema = "inventory")`):** ownership is visible in every query. There is no global `search_path` or Hibernate `default_schema`, which would break once booking adds its own schema.
+  - **Show-status check before claiming:** it is not done under a lock, and that's deliberate. Closing a sale is not a correctness invariant (unlike oversell); a hold granted at the instant of closing just expires or is paid normally. Locking the show row would serialise every hold on a hot show.
+  - **Status rename pulled forward:** creating a brand-new table with a value we already planned to rename would only have meant another migration.
+  - **No separate `idx_show_seats_lookup`:** the unique `(show_id, seat_code)` index already serves the claim and seat-map reads by show. A redundant index on the hottest table only adds write cost.
+- **Alternatives considered:**
+  - **Editing V1 in place:** rejected. An applied migration must never change, because existing databases (Compose, CI caches) would fail Flyway validation.
+  - **Copying the V1 rows into the new tables:** pointless for demo data. A real system would need an expand/migrate/contract sequence instead.
+  - **Per-module Flyway with its own history table in `inventory`:** cleaner for extraction, but V1 is already recorded in `public.flyway_schema_history`. Deferred to P3.1, when booking needs its own migration stream anyway.
+  - **Keeping the legacy `/events/{eventId}/holds` path as an alias:** there are no clients yet, and two paths for one operation would only confuse the contract.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS. Surefire ran 10 tests (ArchUnit) and failsafe 11 ITs on Postgres 16. New tests: V1+V2 applied, 100 priced show seats matching the 100 venue seats, legacy tables gone, unknown show → 404, show not on sale → 409 with nothing held, stored hold status is `HELD`.
+  - **Upgrade path:** the packaged jar ran against the existing Compose database, which already had V1 and a leftover held seat from earlier. Flyway applied only V2.
+  - **Smoke test:** A99+A100 → 201; A100 again → 409 `SEAT_UNAVAILABLE`; random show → 404 `SHOW_NOT_FOUND`.
+- **ADR:** none

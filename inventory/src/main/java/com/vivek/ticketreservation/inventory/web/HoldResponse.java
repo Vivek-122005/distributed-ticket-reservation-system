@@ -4,4 +4,4 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-public record HoldResponse(UUID holdId, String status, Instant expiresAt, List<String> seatCodes) { }
+public record HoldResponse(UUID holdId, UUID showId, String status, Instant expiresAt, List<String> seatCodes) { }

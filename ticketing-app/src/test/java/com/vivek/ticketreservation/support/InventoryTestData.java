@@ -4,19 +4,25 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.UUID;
 
-/** Resets the V1 demo inventory between tests so each test starts from 100 AVAILABLE seats. */
+/** Resets the V2 demo show between tests so each test starts from 100 AVAILABLE seats, on sale. */
 public final class InventoryTestData {
     public static final UUID DEMO_EVENT = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    public static final UUID DEMO_SHOW = UUID.fromString("00000000-0000-0000-0000-000000000101");
 
     private InventoryTestData() { }
 
     public static void reset(JdbcTemplate jdbc) {
-        jdbc.update("UPDATE seat_inventory SET status = 'AVAILABLE', hold_id = NULL, held_by_user_id = NULL, hold_expires_at = NULL");
-        jdbc.update("DELETE FROM holds");
+        jdbc.update("UPDATE inventory.show_seats SET status = 'AVAILABLE', hold_id = NULL, held_by_user_id = NULL, hold_expires_at = NULL");
+        jdbc.update("DELETE FROM inventory.holds");
+        jdbc.update("UPDATE inventory.shows SET status = 'ON_SALE' WHERE id = ?", DEMO_SHOW);
     }
 
     public static String seatStatus(JdbcTemplate jdbc, String seatCode) {
-        return jdbc.queryForObject("SELECT status FROM seat_inventory WHERE event_id = ? AND seat_code = ?",
-                String.class, DEMO_EVENT, seatCode);
+        return jdbc.queryForObject("SELECT status FROM inventory.show_seats WHERE show_id = ? AND seat_code = ?",
+                String.class, DEMO_SHOW, seatCode);
+    }
+
+    public static void setShowStatus(JdbcTemplate jdbc, String status) {
+        jdbc.update("UPDATE inventory.shows SET status = ? WHERE id = ?", status, DEMO_SHOW);
     }
 }

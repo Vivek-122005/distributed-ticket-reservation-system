@@ -16,8 +16,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | # | Pattern | Category | Status | Where (main class) |
 |---|---|---|---|---|
 | 1 | [Ports & Adapters (Hexagonal)](#1-ports--adapters-hexagonal) | Architectural | 🔨 | all modules |
-| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldRepository`, `SeatInventoryRepository` |
-| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `SeatInventoryRepository.claimAvailableSeat` |
+| 2 | [Repository](#2-repository) | Persistence | ✅ | `HoldRepository`, `ShowSeatRepository`, `ShowRepository` |
+| 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `ShowSeatRepository.claimAvailableSeat` |
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
 | 6 | [State](#6-state) | Behavioural (GoF) | ⬜ P1.3, P3.2, P4.2 | `ShowSeat`, `Hold`, `Booking`, `Payment` |
@@ -47,14 +47,14 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 
 ## 2. Repository
 - **Status:** ✅
-- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/infrastructure/HoldRepository.java`, `SeatInventoryRepository.java` (Spring Data JPA).
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/infrastructure/HoldRepository.java`, `ShowSeatRepository.java`, `ShowRepository.java` (Spring Data JPA).
 - **Problem:** use cases need to load and save aggregates without writing SQL plumbing.
 - **Why:** a collection-like interface per aggregate. Spring Data generates the common methods; hot paths use explicit native queries.
 - **Alternative:** a hand-written DAO with `JdbcTemplate`. That gives more control but more boilerplate. It is still available for the hot claim query if JPA overhead shows up in P9.5.
 
 ## 3. Compare-and-Set (conditional update)
 - **Status:** ✅ (single seat per statement; batched form in P1.1, lazy expiry in P1.2)
-- **Where:** `SeatInventoryRepository.claimAvailableSeat`: `UPDATE … SET status='HELD' … WHERE … AND status='AVAILABLE'`; called by `inventory.application.CreateHoldUseCase.execute`.
+- **Where:** `ShowSeatRepository.claimAvailableSeat`: `UPDATE inventory.show_seats SET status='HELD' … WHERE show_id=? AND seat_code=? AND status='AVAILABLE'`; called by `inventory.application.CreateHoldUseCase.execute`.
 - **Problem:** thousands of concurrent requests for the same seat; exactly one may win.
 - **Why:** Postgres re-checks the `WHERE` under the row lock, so the update is an atomic check-and-set. Losers see `0 rows` immediately. All seats are claimed in one transaction, in sorted order: all-or-nothing, and no deadlocks.
 - **Alternative:** `SELECT … FOR UPDATE` then `UPDATE` (pessimistic) holds locks longer; an optimistic `version` check retries a lot under contention. Both are benchmarked in P1.7–P1.8.
