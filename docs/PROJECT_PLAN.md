@@ -460,7 +460,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.8 ✅ | HLD pack: architecture, capacity, flows, ERD in `docs/hld/` | diagrams |
 | P0.9 ✅ | Design revision after the TicketFlow crosswork: Show/Venue model, booking `CANCELLED`, payment `UNKNOWN` + reconciliation, sandbox gateway, thin admin/history/WebSocket scope, error format; ADR 002 (modular monolith first) *(rev)* | plan, HLD, `docs/adr/002-…` |
 | P0.10 ✅ | LLD registries: design patterns and SOLID, each entry → class/file, why, alternative *(rev)* | `docs/lld/DESIGN_PATTERNS.md`, `docs/lld/SOLID.md` |
-| P0.11 ⬜ | API contracts (OpenAPI) for inventory and booking, show-based paths | `docs/api/*.yaml` |
+| P0.11 ✅ | API contracts (OpenAPI) for inventory and booking, show-based paths | `docs/api/*.yaml` |
 | P0.12 ⬜ | SRS: actors, use cases, use-case and activity diagrams *(rev)* | `docs/srs/` |
 | P0.13 ⬜ | Domain class diagrams (inventory, booking, payment) *(rev)* | `docs/lld/class-diagrams.md` |
 | P0.14 ⬜ | Restructure into a modular monolith: `inventory`, `booking`, `payment` modules + `ticketing-app`; ArchUnit boundary tests *(rev)* | Maven modules |

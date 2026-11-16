@@ -1,0 +1,587 @@
+openapi: 3.1.0
+info:
+  title: Inventory API
+  version: 1.0.0
+  description: |
+    Catalog (venues, events, shows) and authoritative seat inventory: seat maps, holds (temporary
+    reservations) and their confirmation/release. PostgreSQL is the source of truth (ADR 001).
+
+    **Deployment (ADR 002):** in stage 1 this is the `inventory` module inside `ticketing-app`;
+    the booking module calls it in-process through the `InventoryApi` port, which mirrors the
+    hold operations below. This HTTP contract is what that port becomes when inventory is
+    extracted into `inventory-service` (P7.8). Catalog reads and the seat map are public.
+
+    **Implementation status** is marked per operation with `x-plan-part` (see docs/PROJECT_PLAN.md).
+    Today only hold creation exists, still at the pre-show path `POST /events/{eventId}/holds`;
+    it moves to `POST /shows/{showId}/holds` with the V2 schema (P1.0).
+
+    **Idempotency:** confirm and release are naturally idempotent (repeating them returns the same
+    result). Hold creation is protected upstream by the booking API's `Idempotency-Key`.
+
+    **User identity:** `X-User-Id` is injected by trusted internal callers until JWT auth (P6.2);
+    it is not an authentication mechanism. Admin operations require role `ADMIN` (P6.9).
+
+    **Money** is always an integer in minor units (paise) to avoid floating-point errors.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development (ticketing-app)
+tags:
+  - name: Catalog
+    description: Public read APIs for events, shows and seat maps
+  - name: Holds
+    description: Internal hold lifecycle used by the booking saga
+  - name: Admin
+    description: Thin admin APIs (role ADMIN), no UI
+
+paths:
+  /events:
+    get:
+      tags: [Catalog]
+      operationId: listEvents
+      summary: List published events
+      x-plan-part: P1.5
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Page of events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+
+  /events/{eventId}/shows:
+    get:
+      tags: [Catalog]
+      operationId: listShows
+      summary: List shows (date + venue) of an event
+      x-plan-part: P1.5
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: Shows of the event, ordered by start time
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Show' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /shows/{showId}/seats:
+    get:
+      tags: [Catalog]
+      operationId: getSeatMap
+      summary: Seat map of a show with current availability
+      description: |
+        Served from the Redis availability cache once P2.3 is built, so it may lag the database by
+        well under a second. A stale "available" seat only leads to a fast 409 on hold, never an
+        oversell. Live changes are pushed on WebSocket topic `/topic/shows/{showId}/seats` (P5.11).
+      x-plan-part: P1.5
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+        - name: section
+          in: query
+          required: false
+          schema: { type: string, maxLength: 20 }
+          description: Only return seats in this section (P7.1).
+      responses:
+        '200':
+          description: Seat map
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatMap' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /shows/{showId}/holds:
+    post:
+      tags: [Holds]
+      operationId: createHold
+      summary: Atomically hold one or more seats of a show
+      description: |
+        All-or-nothing: either every requested seat moves to `HELD` for this hold, or none do.
+        Seats are claimed with a conditional update (compare-and-set) in one transaction, in sorted
+        order to prevent deadlocks. The hold expires automatically after 5 minutes.
+      x-plan-part: P1.0 + P1.1 (implemented at legacy path /events/{eventId}/holds)
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHoldRequest' }
+            example: { seatCodes: [A1, A2] }
+      responses:
+        '201':
+          description: Seats held
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+              example:
+                holdId: 6f1c2a9e-3b6d-4f3e-9a51-2d7c1c0b9e11
+                showId: 0b7e6a52-8c1d-4f0a-9d3e-5a2b1c4d6e7f
+                status: HELD
+                expiresAt: '2026-11-16T10:20:30Z'
+                seats:
+                  - { seatCode: A1, priceMinor: 150000 }
+                  - { seatCode: A2, priceMinor: 150000 }
+                totalMinor: 300000
+                currency: INR
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `SEAT_UNAVAILABLE`: at least one requested seat is not available, nothing was held.
+            `SHOW_NOT_ON_SALE`: the show's sale is not open.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: SEAT_UNAVAILABLE
+                message: One or more requested seats are no longer available.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /holds/{holdId}:
+    get:
+      tags: [Holds]
+      operationId: getHold
+      summary: Get a hold
+      x-plan-part: P1.4
+      parameters:
+        - $ref: '#/components/parameters/HoldId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Holds]
+      operationId: releaseHold
+      summary: Release a hold (seats return to AVAILABLE)
+      description: |
+        Used for booking cancellation and saga compensation (payment declined). Idempotent:
+        releasing an already released or expired hold returns 200 with its current state.
+      x-plan-part: P1.4
+      parameters:
+        - $ref: '#/components/parameters/HoldId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Hold is released (or was already released/expired)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Hold is already CONFIRMED and cannot be released.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: HOLD_ALREADY_CONFIRMED
+                message: Confirmed holds cannot be released.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+
+  /holds/{holdId}/confirm:
+    post:
+      tags: [Holds]
+      operationId: confirmHold
+      summary: Confirm a hold after payment (seats HELD → BOOKED)
+      description: |
+        Called by the booking saga after payment capture. Succeeds only if the hold is still `HELD`
+        and not expired (checked against the database clock). Idempotent: confirming an already
+        confirmed hold returns 200.
+      x-plan-part: P1.4
+      parameters:
+        - $ref: '#/components/parameters/HoldId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Hold confirmed; its seats are BOOKED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Hold expired or was released before confirmation. Caller must start the refund path.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: HOLD_EXPIRED
+                message: Hold expired before confirmation.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /admin/venues:
+    post:
+      tags: [Admin]
+      operationId: createVenue
+      summary: Create a venue with its sections and seat layout
+      x-plan-part: P6.9
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateVenueRequest' }
+      responses:
+        '201':
+          description: Venue created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Venue' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/events:
+    post:
+      tags: [Admin]
+      operationId: createEvent
+      summary: Create an event (in DRAFT)
+      x-plan-part: P6.9
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEventRequest' }
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/events/{eventId}/shows:
+    post:
+      tags: [Admin]
+      operationId: createShow
+      summary: Schedule a show; generates one show seat per venue seat
+      description: Prices are copied from each section's default price unless overridden.
+      x-plan-part: P6.9
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateShowRequest' }
+      responses:
+        '201':
+          description: Show created with its show seats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Show' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/shows/{showId}/status:
+    put:
+      tags: [Admin]
+      operationId: changeShowStatus
+      summary: Open or close a show's sale
+      x-plan-part: P6.9
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ShowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              additionalProperties: false
+              properties:
+                status:
+                  type: string
+                  enum: [ON_SALE, CLOSED]
+      responses:
+        '200':
+          description: Status changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Show' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Illegal transition (for example reopening a CLOSED show).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT from the auth endpoint (P6.2); admin operations need role ADMIN.
+
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ShowId:
+      name: showId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    HoldId:
+      name: holdId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: X-User-Id
+      in: header
+      required: true
+      description: Acting user, injected by the trusted internal caller.
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, default: 0 }
+    Size:
+      name: size
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  schemas:
+    CreateHoldRequest:
+      type: object
+      required: [seatCodes]
+      additionalProperties: false
+      properties:
+        seatCodes:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 20, examples: [A12] }
+          description: Seat codes to hold. Normalised to upper case; duplicates are rejected with 400.
+
+    HoldStatus:
+      type: string
+      enum: [HELD, CONFIRMED, RELEASED, EXPIRED]
+      description: |
+        HELD → CONFIRMED (payment done) | RELEASED (cancel/compensation) | EXPIRED (TTL passed).
+
+    HeldSeat:
+      type: object
+      required: [seatCode, priceMinor]
+      properties:
+        seatCode: { type: string }
+        priceMinor: { type: integer, format: int64, minimum: 0 }
+
+    Hold:
+      type: object
+      required: [holdId, showId, status, expiresAt, seats, totalMinor, currency]
+      properties:
+        holdId: { type: string, format: uuid }
+        showId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HoldStatus' }
+        expiresAt: { type: string, format: date-time }
+        seats:
+          type: array
+          items: { $ref: '#/components/schemas/HeldSeat' }
+        totalMinor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, examples: [INR] }
+
+    SeatStatus:
+      type: string
+      enum: [AVAILABLE, HELD, BOOKED]
+
+    Seat:
+      type: object
+      required: [seatId, seatCode, section, status, priceMinor]
+      properties:
+        seatId: { type: string, format: uuid }
+        seatCode: { type: string }
+        section: { type: string }
+        row: { type: integer }
+        col: { type: integer }
+        status: { $ref: '#/components/schemas/SeatStatus' }
+        priceMinor: { type: integer, format: int64, minimum: 0 }
+
+    SeatMap:
+      type: object
+      required: [showId, seats]
+      properties:
+        showId: { type: string, format: uuid }
+        generatedAt: { type: string, format: date-time }
+        seats:
+          type: array
+          items: { $ref: '#/components/schemas/Seat' }
+
+    EventStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED, CLOSED]
+
+    Event:
+      type: object
+      required: [eventId, name, status]
+      properties:
+        eventId: { type: string, format: uuid }
+        eventCode: { type: string }
+        name: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/EventStatus' }
+
+    EventPage:
+      type: object
+      required: [items, page, size, totalItems]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        page: { type: integer }
+        size: { type: integer }
+        totalItems: { type: integer, format: int64 }
+
+    ShowStatus:
+      type: string
+      enum: [SCHEDULED, ON_SALE, SOLD_OUT, CLOSED]
+
+    Show:
+      type: object
+      required: [showId, eventId, venueId, startsAt, status]
+      properties:
+        showId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        venueId: { type: string, format: uuid }
+        venueName: { type: string }
+        startsAt: { type: string, format: date-time }
+        saleOpensAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/ShowStatus' }
+        availableSeats: { type: integer, description: Approximate (from cache). }
+
+    Venue:
+      type: object
+      required: [venueId, name, sections]
+      properties:
+        venueId: { type: string, format: uuid }
+        name: { type: string }
+        city: { type: string }
+        sections:
+          type: array
+          items:
+            type: object
+            required: [code, seatCount]
+            properties:
+              code: { type: string }
+              seatCount: { type: integer }
+              defaultPriceMinor: { type: integer, format: int64 }
+
+    CreateVenueRequest:
+      type: object
+      required: [name, city, sections]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        city: { type: string, minLength: 1, maxLength: 80 }
+        sections:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [code, rows, seatsPerRow, defaultPriceMinor]
+            additionalProperties: false
+            properties:
+              code: { type: string, minLength: 1, maxLength: 20 }
+              rows: { type: integer, minimum: 1, maximum: 100 }
+              seatsPerRow: { type: integer, minimum: 1, maximum: 200 }
+              defaultPriceMinor: { type: integer, format: int64, minimum: 0 }
+          description: A rectangular layout per section; seat codes are generated as section + row + number.
+
+    CreateEventRequest:
+      type: object
+      required: [eventCode, name]
+      additionalProperties: false
+      properties:
+        eventCode: { type: string, minLength: 1, maxLength: 40 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+
+    CreateShowRequest:
+      type: object
+      required: [venueId, startsAt, saleOpensAt]
+      additionalProperties: false
+      properties:
+        venueId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        saleOpensAt: { type: string, format: date-time }
+        priceOverrides:
+          type: object
+          description: Optional section code → price in minor units.
+          additionalProperties: { type: integer, format: int64, minimum: 0 }
+
+    ApiError:
+      type: object
+      required: [code, message, retryable, timestamp]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code. Clients branch on this, never on message text.
+          enum:
+            - INVALID_REQUEST
+            - FORBIDDEN
+            - EVENT_NOT_FOUND
+            - SHOW_NOT_FOUND
+            - HOLD_NOT_FOUND
+            - SHOW_NOT_ON_SALE
+            - SEAT_UNAVAILABLE
+            - HOLD_EXPIRED
+            - HOLD_ALREADY_CONFIRMED
+            - ILLEGAL_STATE_TRANSITION
+            - SERVICE_UNAVAILABLE
+        message: { type: string }
+        retryable:
+          type: boolean
+          description: True when retrying the same request later may succeed.
+        timestamp: { type: string, format: date-time }
+        traceId:
+          type: string
+          description: OpenTelemetry trace id for support and debugging (P8.1).
+
+  responses:
+    InvalidRequest:
+      description: Request failed validation.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: Event, show or hold does not exist (or the hold belongs to another user).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Forbidden:
+      description: Caller lacks role ADMIN.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unavailable:
+      description: Database or a dependency is unavailable. Safe to retry with backoff.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }

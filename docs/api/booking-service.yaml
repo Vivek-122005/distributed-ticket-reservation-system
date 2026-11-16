@@ -1,0 +1,353 @@
+openapi: 3.1.0
+info:
+  title: Booking API
+  version: 1.0.0
+  description: |
+    Public booking API, reached through the API gateway. A booking wraps one inventory hold and one
+    payment; the booking saga (P4.4) drives it to `CONFIRMED`, `FAILED`, `EXPIRED`, `CANCELLED`
+    or the refund path. See docs/hld/03-request-flows.md (flows 3.3–3.8, 3.11, 3.12).
+
+    **Deployment (ADR 002):** the `booking` module inside `ticketing-app` (stage 1), later
+    `booking-service`. It calls inventory and payment through ports, never their tables.
+
+    **Idempotency (P3.4):** every mutating request must carry an `Idempotency-Key` (UUID, scoped per
+    user, kept 24 h). A retry with the same key and body returns the stored response; the same
+    key with a different body is rejected with 422; a retry while the first request is still
+    running gets 409 with `Retry-After`.
+
+    **Admission (P6.5):** during a hot sale the gateway requires an `X-Admission-Token` issued by
+    the waiting room for this user and show; without it `POST /bookings` returns 403.
+
+    **Payment:** creating a booking also creates a payment intent. The client completes payment
+    with the returned `payment` details (mock checkout or Razorpay test mode). Gateway callbacks
+    go to the payment module's webhook endpoint (contract in P4.1), not to this API.
+
+    **Money** is always an integer in minor units (paise).
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development (through the gateway / ticketing-app)
+security:
+  - bearerAuth: []
+tags:
+  - name: Bookings
+
+paths:
+  /bookings:
+    post:
+      tags: [Bookings]
+      operationId: createBooking
+      summary: Hold seats and start a booking (returns payment details)
+      x-plan-part: P3.1–P3.5, P4.4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AdmissionToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBookingRequest' }
+            example:
+              showId: 0b7e6a52-8c1d-4f0a-9d3e-5a2b1c4d6e7f
+              seatCodes: [A1, A2]
+      responses:
+        '201':
+          description: Booking created in PENDING_PAYMENT; seats held until `holdExpiresAt`.
+          headers:
+            Location:
+              schema: { type: string }
+              description: URL of the new booking.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+              example:
+                bookingId: 3d2a9c1e-7b4f-4c8a-a1e2-9f6b5d4c3b2a
+                showId: 0b7e6a52-8c1d-4f0a-9d3e-5a2b1c4d6e7f
+                status: PENDING_PAYMENT
+                seats:
+                  - { seatCode: A1, priceMinor: 150000 }
+                  - { seatCode: A2, priceMinor: 150000 }
+                amountMinor: 300000
+                currency: INR
+                holdExpiresAt: '2026-11-16T10:20:30Z'
+                payment:
+                  paymentId: 8e7d6c5b-4a39-4281-b7f6-e5d4c3b2a190
+                  status: INITIATED
+                  gateway: MOCK
+                  gatewayOrderId: mock_order_91f2
+                createdAt: '2026-11-16T10:15:30Z'
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: No valid admission token for this show (waiting room active).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `SEAT_UNAVAILABLE`: a requested seat is taken, nothing was held.
+            `SHOW_NOT_ON_SALE`: sale closed or not open yet.
+            `IDEMPOTENCY_IN_PROGRESS`: the first request with this key is still running; retry after `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Present only for IDEMPOTENCY_IN_PROGRESS.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: SEAT_UNAVAILABLE
+                message: One or more requested seats are no longer available.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+        '422':
+          description: Same `Idempotency-Key` reused with a different request body (client bug).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: IDEMPOTENCY_KEY_REUSED
+                message: Idempotency-Key was already used with a different request.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    get:
+      tags: [Bookings]
+      operationId: listMyBookings
+      summary: Booking history of the current user, newest first
+      x-plan-part: P3.8
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/BookingStatus' }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Page of bookings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookingPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /bookings/{bookingId}:
+    get:
+      tags: [Bookings]
+      operationId: getBooking
+      summary: Get one booking (poll this after paying to see CONFIRMED)
+      x-plan-part: P3.8
+      parameters:
+        - $ref: '#/components/parameters/BookingId'
+      responses:
+        '200':
+          description: The booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bookings/{bookingId}/cancel:
+    post:
+      tags: [Bookings]
+      operationId: cancelBooking
+      summary: Cancel a pending booking (releases seats, cancels the payment intent)
+      description: |
+        Allowed only while `PENDING_PAYMENT`. Idempotent: cancelling an already cancelled booking
+        returns 200. If a payment is captured after cancellation, the booking moves to
+        `REFUND_PENDING` and is refunded automatically (flow 3.12).
+      x-plan-part: P3.7
+      parameters:
+        - $ref: '#/components/parameters/BookingId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Booking is CANCELLED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Booking is already CONFIRMED, FAILED or EXPIRED and cannot be cancelled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                code: ILLEGAL_STATE_TRANSITION
+                message: Only PENDING_PAYMENT bookings can be cancelled.
+                retryable: false
+                timestamp: '2026-11-16T10:15:30Z'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT issued by the auth endpoint (P6.2); the user id comes from the token. Until P6.2 the
+        local build accepts an `X-User-Id` header instead.
+
+  parameters:
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated UUID; reuse it when retrying the same request.
+      schema: { type: string, format: uuid }
+    AdmissionToken:
+      name: X-Admission-Token
+      in: header
+      required: false
+      description: Signed waiting-room token (required only while the show's waiting room is active).
+      schema: { type: string }
+
+  schemas:
+    CreateBookingRequest:
+      type: object
+      required: [showId, seatCodes]
+      additionalProperties: false
+      properties:
+        showId: { type: string, format: uuid }
+        seatCodes:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 20 }
+
+    BookingStatus:
+      type: string
+      enum: [PENDING_PAYMENT, CONFIRMED, FAILED, EXPIRED, CANCELLED, REFUND_PENDING, REFUNDED]
+      description: See the booking state machine in PROJECT_PLAN.md §4.4.
+
+    PaymentStatus:
+      type: string
+      enum: [INITIATED, PROCESSING, CAPTURED, FAILED, UNKNOWN, REFUNDED]
+      description: |
+        `UNKNOWN` means the gateway did not answer; reconciliation (P4.8) resolves it within the
+        reconciliation window. Clients should keep polling the booking.
+
+    BookingSeat:
+      type: object
+      required: [seatCode, priceMinor]
+      properties:
+        seatCode: { type: string }
+        section: { type: string }
+        priceMinor: { type: integer, format: int64, minimum: 0 }
+
+    PaymentSummary:
+      type: object
+      required: [paymentId, status, gateway]
+      properties:
+        paymentId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        gateway:
+          type: string
+          enum: [MOCK, SANDBOX]
+        gatewayOrderId:
+          type: string
+          description: Order id the client passes to the gateway checkout.
+
+    Booking:
+      type: object
+      required: [bookingId, showId, status, seats, amountMinor, currency, createdAt]
+      properties:
+        bookingId: { type: string, format: uuid }
+        showId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        seats:
+          type: array
+          items: { $ref: '#/components/schemas/BookingSeat' }
+        amountMinor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, examples: [INR] }
+        holdExpiresAt:
+          type: string
+          format: date-time
+          description: Pay before this time; present while PENDING_PAYMENT.
+        payment: { $ref: '#/components/schemas/PaymentSummary' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    BookingPage:
+      type: object
+      required: [items, page, size, totalItems]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Booking' }
+        page: { type: integer }
+        size: { type: integer }
+        totalItems: { type: integer, format: int64 }
+
+    ApiError:
+      type: object
+      required: [code, message, retryable, timestamp]
+      description: Same error shape as the inventory API.
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - UNAUTHORIZED
+            - ADMISSION_REQUIRED
+            - SHOW_NOT_FOUND
+            - BOOKING_NOT_FOUND
+            - SHOW_NOT_ON_SALE
+            - SEAT_UNAVAILABLE
+            - IDEMPOTENCY_IN_PROGRESS
+            - IDEMPOTENCY_KEY_REUSED
+            - ILLEGAL_STATE_TRANSITION
+            - RATE_LIMITED
+            - SERVICE_UNAVAILABLE
+        message: { type: string }
+        retryable: { type: boolean }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string }
+
+  responses:
+    InvalidRequest:
+      description: Request failed validation (including a missing Idempotency-Key).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unauthorized:
+      description: Missing or invalid token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: Show or booking not found (bookings of other users are reported as not found).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    RateLimited:
+      description: Token bucket exhausted for this user or IP (P6.3).
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unavailable:
+      description: A dependency is down or a circuit breaker is open. Safe to retry with backoff and the same Idempotency-Key.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }

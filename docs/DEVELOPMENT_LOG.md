@@ -128,3 +128,22 @@ A running record of **what was built, in which phase, in which part of the syste
 - **How it was verified:** each ✅ entry was checked against the actual source files in `inventory-service`. The deviations list comes from reading every class in that module.
 - **ADR:** none
 
+### P0.11 — API contracts (OpenAPI 3.1)
+- **Date:** 2026-11-16
+- **Module / files:** `docs/api/inventory-service.yaml`, `docs/api/booking-service.yaml`, `docs/api/README.md`
+- **What was built:**
+  - **Inventory contract (11 operations):** catalog reads (`/events`, `/events/{id}/shows`, `/shows/{id}/seats`); the hold lifecycle (`POST /shows/{id}/holds`, `GET`/`DELETE /holds/{id}`, `POST /holds/{id}/confirm`); thin admin operations (venue with seat layout, event, show, sale status).
+  - **Booking contract (4 operations):** create booking (with `Idempotency-Key` and an optional `X-Admission-Token`, returning payment details), history (paginated), get, and cancel.
+  - **Shared conventions:** one error shape `{code, message, retryable, timestamp, traceId?}` with a stable code enum; money in minor units; an `x-plan-part` tag on every operation.
+- **Why this approach:**
+  - **Contract-first:** the booking module and the future extracted inventory service are built against the same fixed interface, and the 409/422 idempotency behaviour from HLD flow 3.7 is written down before the code.
+  - **Error shape:** `retryable` (ours) and `timestamp` (from the TicketFlow blueprint) together tell a client *whether* to retry and help support correlate errors with logs and traces.
+  - **Explicit 409 cases:** `SEAT_UNAVAILABLE`, `HOLD_EXPIRED` and `IDEMPOTENCY_IN_PROGRESS` each map to a different client action (pick other seats, start the refund path, retry later).
+  - **Integer minor units:** no floating-point rounding errors in money.
+- **Alternatives considered:**
+  - **Code-first (springdoc generating the spec):** the spec would only exist after the code and would follow it, not guide it. springdoc may still be added later to *check* the code against these files.
+  - **RFC 7807 `application/problem+json`:** a good standard, but its `type`/`title`/`detail` fields add little over a stable `code`. Our shape is simpler for k6 assertions. It can be adopted later without breaking clients by adding fields.
+  - **gRPC/protobuf for internal calls:** not needed at this scale (HLD §1.4).
+- **How it was verified:** both files pass `openapi-spec-validator` (OpenAPI 3.1). A script confirmed that every `$ref` resolves and that no component is unused. Only `POST /events/{eventId}/holds` exists in code today; the spec documents that it moves to the show-based path in P1.0.
+- **ADR:** none
+
