@@ -28,6 +28,10 @@ inventory:
     # P2.3: seat maps from Redis, kept current from SeatsChanged events; falls back to Postgres.
     enabled: ${SEAT_CACHE_ENABLED:true}
     update-queue: 10000
+  reconcile:
+    # P2.5: repair Redis seat-cache drift from Postgres (Postgres wins).
+    enabled: ${RECONCILE_ENABLED:true}
+    interval: ${RECONCILE_INTERVAL:30s}
   fast-path:
     # P2.4: reject requests for seats the cache knows are taken before any database work (needs seat-cache).
     enabled: ${FAST_PATH_ENABLED:true}

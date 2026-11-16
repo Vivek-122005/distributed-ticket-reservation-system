@@ -758,3 +758,33 @@ A running record of **what was built, in which phase, in which part of the syste
     - cold cache → Postgres decides;
     - Redis paused → holds still work, a taken seat is still refused by Postgres, and the filter error is counted.
 - **ADR:** follow-up of [003](adr/003-seat-locking-strategy.md)
+
+### P2.5 — Seat-cache reconciliation
+- **Date:** 2026-11-16
+- **Module / files:** `infrastructure.cache.SeatCacheReconciler`, `ScheduledSeatCacheReconciliation`, `SeatCacheConfig`; `application.yml` (`inventory.reconcile.*`), test properties; `SeatCacheReconcilerIT`; plan, registries (new #27)
+- **What was built:**
+  - **The job:** every 30 s (`RECONCILE_INTERVAL`), for every show that is on sale and currently cached, it reads the Postgres seat states and the Redis hash and repairs differences. Postgres wins.
+  - **Drift rules:**
+    - **Missing** (no entry) or **stale** (older version than Postgres): written through the version-guarded `APPLY`.
+    - **Diverged** (same version, different state: a corrupted value, or a pending mark whose request died): replaced by compare-and-set, only if the entry is still exactly what was read.
+    - **Not drift:** an entry *ahead* of the snapshot (an event landed after our read) and a *fresh* pending mark are left alone.
+  - **Metric:** `inventory_drift_total{kind=missing|stale|diverged}`. A warning is logged per show with repairs.
+- **Why this approach:**
+  - **Closing the durability gap:** this is the safety net for every gap left by P2.1–P2.4: in-process events lost in a crash, updates dropped by the bounded queue, a Redis restart, or a manual SQL fix. With it, drift is bounded by one interval, and the outbox (P5.2) later makes it rarer, not unnecessary.
+  - **Never overwrite newer data:** a naive "copy Postgres into Redis" would race with live updates and sometimes write an *older* snapshot over a newer event. Version guards and compare-and-set make the repair safe to run during a sale.
+  - **Dead pending marks:** a request that crashed between the filter and the database leaves a `P` mark. It already times out for reads and for the filter after 2 s, and reconciliation removes it from storage.
+  - **Every replica runs it:** it's read-only on Postgres and idempotent in Redis, so there's no leader (same reasoning as P2.2).
+- **Alternatives considered:**
+  - **Entry TTLs:** these force reloads at the worst time and don't fix wrong data any faster.
+  - **Rebuilding the whole hash:** races with live updates.
+  - **Comparing only counts (available seats):** cheaper, but it can't tell *which* seat drifted or repair it.
+  - **Running only on demand (an admin endpoint):** drift would persist until someone notices.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 152 tests and 1 skipped.
+  - **`SeatCacheReconcilerIT`:**
+    - a consistent cache needs no repair, and the cached show is discovered;
+    - one missing, one stale (database changed without an event) and one diverged entry are all repaired, the counters move, and a second run finds nothing (idempotent);
+    - a fresh pending mark and a cache-ahead entry are left alone;
+    - an abandoned pending mark is cleaned up.
+  - **Smoke test of the packaged jar (2 s interval) with the Compose Redis:** after A1 was deleted and A2 corrupted to `BOOKED` by hand, both were back to `0|A|0` (matching Postgres) within 4 s. The log showed `{MISSING=1, DIVERGED=1}`, and `inventory_drift_total` matched.
+- **ADR:** none

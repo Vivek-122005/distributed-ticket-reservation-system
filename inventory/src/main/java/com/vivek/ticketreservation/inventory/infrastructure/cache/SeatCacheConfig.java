@@ -39,6 +39,18 @@ class SeatCacheConfig {
         return new RedisSeatFilter(redis, registry);
     }
 
+    @Bean
+    SeatCacheReconciler seatCacheReconciler(SeatStateCache cache, SeatSnapshots snapshots, StringRedisTemplate redis,
+                                            NamedParameterJdbcTemplate jdbc, MeterRegistry registry) {
+        return new SeatCacheReconciler(cache, snapshots, redis, jdbc, registry);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "inventory.reconcile.enabled", havingValue = "true", matchIfMissing = true)
+    ScheduledSeatCacheReconciliation scheduledSeatCacheReconciliation(SeatCacheReconciler reconciler) {
+        return new ScheduledSeatCacheReconciliation(reconciler);
+    }
+
     /** The decorated store becomes the one the read side uses; the JDBC store stays inside as fallback. */
     @Bean
     @Primary

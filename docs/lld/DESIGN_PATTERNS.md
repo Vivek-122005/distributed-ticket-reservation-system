@@ -40,6 +40,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 24 | [Versioned last-writer-wins](#24-versioned-last-writer-wins-order-independent-cache-updates) | Consistency | ✅ P2.3 | `SeatStateCache.APPLY` + row `version` in `SeatsChanged` |
 | 25 | [Null Object](#25-null-object) | Behavioural | ✅ P2.4 | `NoSeatFilter` (pass-through `SeatFilter`) |
 | 26 | [Fast-reject filter (cache as filter, DB as authority)](#26-fast-reject-filter-cache-as-filter-db-as-authority) | Performance | ✅ P2.4 | `FilteredCreateHold` + `RedisSeatFilter` |
+| 27 | [Reconciliation (anti-entropy)](#27-reconciliation-anti-entropy) | Consistency | ✅ P2.5 | `SeatCacheReconciler` |
 | 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5, Redis read model P2.3 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
@@ -311,3 +312,18 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Redis Lua inside the transaction (P1.7 `RedisLuaStrategy`):** the same rejection power, but it took the whole app down when Redis hung (P1.8).
   - **Bloom filter of sold seats:** no per-hold expiry, and it can't express "pending".
   - **Waiting room only (P6):** limits how many users get in, but doesn't stop admitted users stampeding one seat. The two are complementary.
+
+## 27. Reconciliation (anti-entropy)
+- **Status:** ✅ P2.5 (the payment reconciliation job follows in P4.8)
+- **Where:**
+  - **The job:** `inventory.infrastructure.cache.SeatCacheReconciler.reconcile(showId)`, scheduled by `ScheduledSeatCacheReconciliation` every `inventory.reconcile.interval` (30 s).
+  - **Repair script:** `COMPARE_AND_SET` (Lua) for diverged entries; `SeatStateCache.APPLY` for stale and missing ones.
+- **Problem:** the cache is fed by best-effort events: in-process until the outbox, dropped when the update queue is full, and lost on a crash or a Redis restart. Without a repair loop, one lost event would leave a seat wrong until its next change, which for a booked seat is never.
+- **Why:**
+  - **Bounded drift:** periodically comparing with the authority and repairing caps the drift at one interval, whatever went wrong.
+  - **Repairs never fight live traffic:** version-guarded writes for stale entries, and compare-and-set for same-version divergence. Entries ahead of the snapshot (an event landed after our read) and fresh pending marks are recognised as in-flight work.
+  - **Idempotent and read-only on Postgres:** every replica may run it without coordination (see #23).
+- **Alternative:**
+  - **TTL on cache entries:** bounds staleness too, but forces regular full reloads during the hottest minutes and still serves wrong data until expiry.
+  - **Rebuild the whole hash periodically:** simpler, but it overwrites newer events with an older snapshot. That is exactly the race the version rules avoid.
+  - **Merkle-tree comparison:** this is for huge datasets across nodes; a show has at most a few thousand seats, so a direct comparison is cheap.
