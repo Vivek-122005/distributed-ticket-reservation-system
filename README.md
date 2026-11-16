@@ -45,6 +45,8 @@ curl -X POST http://localhost:8080/api/v1/shows/00000000-0000-0000-0000-00000000
   -d '{"seatCodes":["A1","A2"]}'
 ```
 
+Redis is optional: `SEAT_CACHE_ENABLED=false` / `FAST_PATH_ENABLED=false` switch the Redis paths off. If Redis dies at runtime, a circuit breaker sends everything to Postgres within a few requests.
+
 Metrics: `curl localhost:8080/actuator/prometheus | grep -E 'seat_hold|hold_latency|hold_transitions'`.
 
 ## Next milestones

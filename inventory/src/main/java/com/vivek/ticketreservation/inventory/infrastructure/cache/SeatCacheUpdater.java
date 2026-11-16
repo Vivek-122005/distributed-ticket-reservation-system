@@ -25,13 +25,15 @@ import java.util.concurrent.TimeUnit;
 class SeatCacheUpdater {
     private static final Logger log = LoggerFactory.getLogger(SeatCacheUpdater.class);
     private final SeatStateCache cache;
+    private final RedisGuard guard;
     private final ThreadPoolExecutor executor;
     private final Counter applied;
     private final Counter dropped;
     private final Counter failed;
 
-    SeatCacheUpdater(SeatStateCache cache, MeterRegistry registry, int queueCapacity) {
+    SeatCacheUpdater(SeatStateCache cache, RedisGuard guard, MeterRegistry registry, int queueCapacity) {
         this.cache = cache;
+        this.guard = guard;
         this.applied = counter(registry, "applied");
         this.dropped = counter(registry, "dropped");
         this.failed = counter(registry, "failed");
@@ -47,15 +49,10 @@ class SeatCacheUpdater {
     void on(SeatsChanged event) {
         var seats = event.seats().stream()
                 .map(s -> new CachedSeat(s.seatCode(), s.status(), s.holdExpiresAt(), s.version())).toList();
-        executor.execute(() -> {
-            try {
-                cache.apply(event.showId(), seats);
-                applied.increment();
-            } catch (RuntimeException e) {
-                failed.increment();
-                log.debug("Seat cache update for show {} failed: {}", event.showId(), e.getMessage());
-            }
-        });
+        if (guard.isOpen()) { dropped.increment(); return; }   // Redis known down: don't queue work that will fail
+        executor.execute(() -> guard.run(
+                () -> { cache.apply(event.showId(), seats); applied.increment(); },
+                () -> { failed.increment(); log.debug("Seat cache update for show {} not applied", event.showId()); }));
     }
 
     /** For tests and shutdown: waits until queued updates are applied. */

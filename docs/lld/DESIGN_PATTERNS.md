@@ -32,7 +32,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 15 | [Factory](#15-factory) | Creational (GoF) | ⬜ P5.1 | `EventEnvelopeFactory` |
 | 16 | [Builder](#16-builder) | Creational (GoF) | ⬜ P3.6 (not needed in P1.6) | test-data builders |
 | 17 | [Chain of Responsibility](#17-chain-of-responsibility) | Behavioural (GoF) | ⬜ P6.1–P6.5 | gateway filters |
-| 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | ⬜ P7.8 | HTTP adapters (Resilience4j) |
+| 18 | [Circuit Breaker / Retry / Bulkhead](#18-circuit-breaker--retry--bulkhead) | Resilience | 🔨 breaker for Redis ✅ P2.6; HTTP adapters ⬜ P7.8 | `RedisGuard` (Resilience4j); later HTTP adapters |
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
 | 20 | [Fencing token](#20-fencing-token) | Concurrency | ✅ P1.7 | `RedisLockStrategy` + `show_seats.lock_fence` |
 | 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7, P2.3 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy`; `CachedCatalogReadStore` wraps `JdbcCatalogReadStore` |
@@ -197,7 +197,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** one big filter. Hard to test and reorder.
 
 ## 18. Circuit Breaker / Retry / Bulkhead
-- **Status:** ⬜ P7.8 (inventory HTTP adapter), P7.9 (payment), plus the PSP adapter in P4.1
+- **Status:** 🔨 the Redis breaker is ✅ (P2.6): `inventory.infrastructure.cache.RedisGuard` wraps one Resilience4j `CircuitBreaker` named `redis`, configured in `SeatCacheConfig.redisGuard` (count window 10, minimum 5 calls, 50% failure rate, 5 s open, 3 half-open trials). It is shared by `RedisSeatFilter`, `CachedCatalogReadStore`, `SeatCacheUpdater` and `ScheduledSeatCacheReconciliation`. Every call has a fallback: skip the filter, read from Postgres, or drop the update. It is exported as `resilience4j_circuitbreaker_*{name="redis"}`. Measured: holds 256–266 ms while the breaker learns, then 2–3 ms. HTTP adapters (retry, bulkhead) are ⬜ P7.8.
 - **Plan:** Resilience4j around remote adapters, with timeouts and retry policy from HLD §5.5.
 - **Why:** a slow dependency must fail fast instead of exhausting threads (cascading failure).
 - **Alternative:** plain timeouts only. They don't stop retry storms against a dependency that is down.

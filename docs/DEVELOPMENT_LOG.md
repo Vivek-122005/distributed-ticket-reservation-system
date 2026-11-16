@@ -788,3 +788,46 @@ A running record of **what was built, in which phase, in which part of the syste
     - an abandoned pending mark is cleaned up.
   - **Smoke test of the packaged jar (2 s interval) with the Compose Redis:** after A1 was deleted and A2 corrupted to `BOOKED` by hand, both were back to `0|A|0` (matching Postgres) within 4 s. The log showed `{MISSING=1, DIVERGED=1}`, and `inventory_drift_total` matched.
 - **ADR:** none
+
+### P2.6 — Redis-down behaviour: flags and a circuit breaker
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **New:** `infrastructure.cache.RedisGuard`.
+  - **Wired through it:** `RedisSeatFilter`, `CachedCatalogReadStore`, `SeatCacheUpdater`, `ScheduledSeatCacheReconciliation`, `SeatCacheConfig`.
+  - **Build:** root `pom.xml` (Resilience4j 2.2.0 BOM) and `inventory/pom.xml` (`resilience4j-circuitbreaker`, `resilience4j-micrometer`).
+  - **Config:** `application.yml` (`inventory.redis-breaker.wait-in-open`).
+  - **Tests:** `RedisOutageIT`.
+  - **Docs:** plan, ADR 003 follow-up, DESIGN_PATTERNS #18, README.
+- **What was built:**
+  - **Flags:** `SEAT_CACHE_ENABLED=false` removes the cache, filter and reconciliation beans, so everything is served by Postgres. `FAST_PATH_ENABLED=false` removes only the filter (Null Object, P2.4).
+  - **One circuit breaker, `redis`:** it guards every Redis call in the module and has a fallback for each:
+    - **filter:** skip the filter;
+    - **seat map:** read from Postgres;
+    - **cache update:** count it as dropped, and don't queue at all while the breaker is open;
+    - **reconciliation:** skip the round.
+  - **Breaker settings:** count window 10, at least 5 calls, opens at 50% failures, stays open 5 s, then 3 trial calls. Exported as `resilience4j_circuitbreaker_state{name="redis"}`, plus `redis_calls_short_circuited_total`.
+- **Why this approach:**
+  - **The last piece of ADR 003:** P2.4 already fails open, but without a breaker *every* request still waits for the 250 ms Redis timeout before falling back. Under flash-sale load that is a 250 ms latency floor and thousands of hung Redis calls. The breaker turns "Redis is dead" into a decision made once, not per request.
+  - **One shared breaker:** the four users all depend on the same Redis. Whichever notices the outage first protects the others, and recovery is detected once.
+  - **Resilience4j instead of a hand-written breaker:** it's the standard JVM library (and is planned for the HTTP adapters in P7.8), with tested half-open semantics and Micrometer metrics. Only the core module is used, not the Spring Boot starter, so the configuration is explicit in one bean.
+  - **Updates dropped, not queued, while open:** queuing would fill the buffer with work certain to fail. Reconciliation repairs the cache after recovery.
+- **Problem found (and fixed):** the first version of the outage test passed for the wrong reason. A previous test in the same class had left the breaker open, so "Redis down" requests were fast from the start. `RedisGuard.reset()` now runs before each test, and the assertion requires the first calls to *pay* the timeout, proving the breaker is what makes the later calls fast.
+- **Alternatives considered:**
+  - **A shorter Redis timeout only (for example 20 ms):** this shrinks the cost but still pays it on every request, and it risks false failures during GC pauses.
+  - **A health-check thread that flips a flag:** detection lags by the check interval, and it duplicates what the breaker learns from real traffic.
+  - **Spring Retry with a recovery method:** retry is the opposite of what's wanted here; it adds load to a struggling Redis.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 154 tests and 1 skipped.
+  - **`RedisOutageIT`, with Redis paused:**
+    - the first holds took 256, 266 and 260 ms, then 3 ms once the breaker opened (p95 of the remaining 30: 2 ms);
+    - all 40 holds succeeded, and Postgres alone still refused a taken seat;
+    - the seat map served 100 seats from Postgres in 1 ms;
+    - after unpausing and waiting 1 s (test setting), the trial calls closed the breaker, the fast path rejected a taken seat again, and the invariants held.
+  - **Smoke test of the packaged jar with the Compose Redis stopped:** 10 holds all succeeded (55 ms, then 3–6 ms), and the breaker reported `open`. After `docker compose start redis`, 4 holds took 11–34 ms, the breaker was `closed`, and a taken seat got a 409 in 8 ms through the fast path.
+- **ADR:** follow-up of [003](adr/003-seat-locking-strategy.md)
+
+**Phase 2 complete:**
+- **Expiry:** expired holds are cleaned up by leaderless workers.
+- **Seat-map reads:** served from a versioned Redis cache, which reconciliation keeps honest.
+- **Fast path:** most flash-sale losers are rejected in Redis before Postgres.
+- **Redis outage:** losing Redis costs only speed, never correctness or availability.

@@ -15,11 +15,13 @@ import java.util.UUID;
 class ScheduledSeatCacheReconciliation {
     private static final Logger log = LoggerFactory.getLogger(ScheduledSeatCacheReconciliation.class);
     private final SeatCacheReconciler reconciler;
+    private final RedisGuard guard;
 
-    ScheduledSeatCacheReconciliation(SeatCacheReconciler reconciler) { this.reconciler = reconciler; }
+    ScheduledSeatCacheReconciliation(SeatCacheReconciler reconciler, RedisGuard guard) { this.reconciler = reconciler; this.guard = guard; }
 
     @Scheduled(fixedDelayString = "${inventory.reconcile.interval:30s}", initialDelayString = "${inventory.reconcile.interval:30s}")
     void tick() {
+        if (guard.isOpen()) return;   // Redis is down; the next round after recovery repairs everything
         try {
             for (UUID show : reconciler.cachedShowsOnSale()) {
                 SeatCacheReconciler.Report report = reconciler.reconcile(show);

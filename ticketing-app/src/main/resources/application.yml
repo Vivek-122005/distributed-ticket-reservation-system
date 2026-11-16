@@ -35,6 +35,9 @@ inventory:
   fast-path:
     # P2.4: reject requests for seats the cache knows are taken before any database work (needs seat-cache).
     enabled: ${FAST_PATH_ENABLED:true}
+  redis-breaker:
+    # P2.6: how long Redis is skipped after the breaker opens before trial calls are allowed.
+    wait-in-open: ${REDIS_BREAKER_WAIT:5s}
   locking:
     # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
     strategy: ${LOCKING_STRATEGY:conditional-update}

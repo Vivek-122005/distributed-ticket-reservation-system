@@ -24,7 +24,8 @@ import java.util.UUID;
  * version, so the committed {@code SeatsChanged} (higher version) replaces them; if that never comes,
  * they expire after {@link #PENDING_TTL}.
  *
- * <p>Gives up (SKIPPED) rather than guessing: show not warmed, unknown seat code, or any Redis error.
+ * <p>Gives up (SKIPPED) rather than guessing: show not warmed, unknown seat code, any Redis error, or the
+ * shared breaker is open (P2.6), in which case Redis is not even called.
  */
 class RedisSeatFilter implements SeatFilter {
     private static final Logger log = LoggerFactory.getLogger(RedisSeatFilter.class);
@@ -67,11 +68,13 @@ class RedisSeatFilter implements SeatFilter {
             """, Long.class);
 
     private final StringRedisTemplate redis;
+    private final RedisGuard guard;
     private final Map<Verdict, Counter> verdicts = new EnumMap<>(Verdict.class);
     private final Counter errors;
 
-    RedisSeatFilter(StringRedisTemplate redis, MeterRegistry registry) {
+    RedisSeatFilter(StringRedisTemplate redis, RedisGuard guard, MeterRegistry registry) {
         this.redis = redis;
+        this.guard = guard;
         for (Verdict v : Verdict.values()) {
             verdicts.put(v, Counter.builder("seat.filter.verdicts").description("Fast-path decisions before Postgres")
                     .tag("verdict", v.name()).register(registry));
@@ -82,18 +85,17 @@ class RedisSeatFilter implements SeatFilter {
     @Override
     public Reservation tryReserve(UUID showId, List<String> seatCodes) {
         String token = UUID.randomUUID().toString();
-        Reservation result;
-        try {
+        Reservation result = guard.call(() -> {
             List<String> args = new ArrayList<>(List.of(Long.toString(PENDING_TTL.toMillis()), token));
             args.addAll(seatCodes);
             Long answer = redis.execute(RESERVE, List.of(SeatStateCache.key(showId), SeatStateCache.readyKey(showId)), args.toArray());
-            result = answer == null || answer < 0 ? Reservation.skipped()
+            return answer == null || answer < 0 ? Reservation.skipped()
                     : new Reservation(answer == 1 ? Verdict.RESERVED : Verdict.REJECTED, showId, seatCodes, token);
-        } catch (RuntimeException redisDown) {
+        }, () -> {
             errors.increment();
-            log.debug("Fast path skipped for show {}: {}", showId, redisDown.getMessage());
-            result = Reservation.skipped();
-        }
+            log.debug("Fast path skipped for show {} (Redis failed or breaker open)", showId);
+            return Reservation.skipped();
+        });
         verdicts.get(result.verdict()).increment();
         return result;
     }
@@ -101,12 +103,10 @@ class RedisSeatFilter implements SeatFilter {
     @Override
     public void cancel(Reservation reservation) {
         if (reservation.verdict() != Verdict.RESERVED) return;
-        try {
+        guard.run(() -> {
             List<String> args = new ArrayList<>(List.of(reservation.token()));
             args.addAll(reservation.seatCodes());
             redis.execute(CANCEL, List.of(SeatStateCache.key(reservation.showId())), args.toArray());
-        } catch (RuntimeException ignored) {
-            // The marks time out on their own after PENDING_TTL.
-        }
+        }, () -> { /* the marks time out on their own after PENDING_TTL */ });
     }
 }

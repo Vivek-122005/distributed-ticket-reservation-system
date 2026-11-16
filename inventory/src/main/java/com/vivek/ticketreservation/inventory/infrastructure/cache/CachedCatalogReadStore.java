@@ -41,13 +41,15 @@ class CachedCatalogReadStore implements CatalogReadStore {
     private final CatalogReadStore database;
     private final SeatStateCache cache;
     private final SeatSnapshots snapshots;
+    private final RedisGuard guard;
     private final Map<UUID, List<LayoutSeat>> layouts = new ConcurrentHashMap<>();
     private final Counter fromRedis;
     private final Counter fromWarmup;
     private final Counter fromDatabase;
 
-    CachedCatalogReadStore(CatalogReadStore database, SeatStateCache cache, SeatSnapshots snapshots, MeterRegistry registry) {
-        this.database = database; this.cache = cache; this.snapshots = snapshots;
+    CachedCatalogReadStore(CatalogReadStore database, SeatStateCache cache, SeatSnapshots snapshots, RedisGuard guard,
+                           MeterRegistry registry) {
+        this.database = database; this.cache = cache; this.snapshots = snapshots; this.guard = guard;
         this.fromRedis = counter(registry, "redis");
         this.fromWarmup = counter(registry, "warmup");
         this.fromDatabase = counter(registry, "database");
@@ -68,7 +70,7 @@ class CachedCatalogReadStore implements CatalogReadStore {
             layouts.remove(showId);   // unknown show (or no seats): don't cache a miss
             return database.seatMap(showId, section);
         }
-        try {
+        return guard.call(() -> {
             Optional<Map<String, CachedSeat>> cached = cache.read(showId);
             Map<String, CachedSeat> states;
             if (cached.isPresent()) {
@@ -81,11 +83,11 @@ class CachedCatalogReadStore implements CatalogReadStore {
                 fromWarmup.increment();
             }
             return Optional.of(view(showId, layout, states, section));
-        } catch (RuntimeException redisDown) {
+        }, () -> {
             fromDatabase.increment();
-            log.debug("Seat map of {} served from Postgres: {}", showId, redisDown.getMessage());
+            log.debug("Seat map of {} served from Postgres (Redis failed or breaker open)", showId);
             return database.seatMap(showId, section);
-        }
+        });
     }
 
     private static SeatMapView view(UUID showId, List<LayoutSeat> layout, Map<String, CachedSeat> states, Optional<String> section) {
