@@ -4,7 +4,8 @@ A final-year, production-inspired backend project for high-demand ticket sales. 
 
 ## Current milestone
 
-- Java 21 / Spring Boot inventory service
+- Java 21 / Spring Boot modular monolith (`ticketing-app`) with an inventory module; booking and payment modules scaffolded
+- Module boundaries enforced by ArchUnit tests in CI
 - PostgreSQL as the authoritative inventory store
 - Atomic, all-or-nothing multi-seat holds using transactional conditional updates
 - Five-minute hold expiry model
@@ -15,15 +16,15 @@ A final-year, production-inspired backend project for high-demand ticket sales. 
 
 Prerequisites: Java 21+, Maven 3.9+ and Docker Desktop.
 
-The repository is a Maven multi-module build (`common`, `inventory-service`, more services to come). See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the full roadmap and [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md) for what was built in each phase and why.
+The repository is a Maven multi-module build: `common`, the core modules `inventory`, `booking` and `payment`, and `ticketing-app`, the one deployable that bundles them ([ADR 002](docs/adr/002-modular-monolith-first.md)). Design docs: [SRS](docs/srs/SRS.md), [HLD](docs/hld/README.md), [LLD](docs/lld/class-diagrams.md), [API contracts](docs/api/README.md). See [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the full roadmap and [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md) for what was built in each phase and why.
 
 ```bash
 docker compose up -d
 mvn install -DskipTests          # builds all modules from the root parent POM
-mvn -pl inventory-service spring-boot:run
+mvn -pl ticketing-app spring-boot:run
 ```
 
-The service starts at `http://localhost:8080`.
+The app starts at `http://localhost:8080`.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/events/00000000-0000-0000-0000-000000000001/holds \

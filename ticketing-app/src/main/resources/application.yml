@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: ticketing-app
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ticket_reservation}
+    username: ${DB_USERNAME:ticket}
+    password: ${DB_PASSWORD:ticket}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    # One folder per module; per-module schemas arrive with the V2 migration (P1.0).
+    locations: classpath:db/migration/inventory
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

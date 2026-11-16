@@ -345,10 +345,11 @@ Also per module: `outbox`, `processed_events`, `idempotency_keys` and `booking_s
 
 ## 5. Low-Level Design (LLD) principles
 
-Each service uses **hexagonal (ports & adapters) layering** — already started in `inventory-service`:
+Each module uses **hexagonal (ports & adapters) layering**, already in place in `inventory/`:
 
 ```
-api/            → controllers, request/response DTOs, exception mapping (adapters in)
+api/            → published module port (e.g. InventoryApi) + its DTOs, the only package other modules may use
+web/            → controllers, HTTP request/response DTOs, exception mapping (adapters in)
 application/    → use cases, transaction boundaries, orchestration
 domain/         → entities, value objects, state machines, domain exceptions (no Spring)
 infrastructure/ → JPA repositories, Redis, Kafka, HTTP clients (adapters out)
@@ -412,11 +413,11 @@ SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`
 ├── common/                       # event envelope, shared DTOs, idempotency & outbox libs
 ├── api-gateway/
 ├── waiting-room-service/
-├── inventory/                    # module: catalog + seat inventory (from inventory-service, P0.14)
+├── inventory/                    # module: catalog + seat inventory (moved from inventory-service in P0.14)
 ├── booking/                      # module: booking lifecycle, idempotency, saga
 ├── payment/                      # module: PaymentGateway port + adapters, reconciliation
 ├── ticketing-app/                # stage-1 deployable that bundles the three modules
-├── inventory-service/            # stage-2 extraction (P7.8); today: current bootstrap code
+├── inventory-service/            # stage-2 extraction (P7.8)
 ├── payment-service/              # stage-2 extraction (P7.9)
 ├── notification-service/
 ├── ticket-service/
@@ -463,7 +464,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.11 ✅ | API contracts (OpenAPI) for inventory and booking, show-based paths | `docs/api/*.yaml` |
 | P0.12 ✅ | SRS: actors, use cases, use-case and activity diagrams *(rev)* | `docs/srs/` |
 | P0.13 ✅ | Domain class diagrams (inventory, booking, payment) *(rev)* | `docs/lld/class-diagrams.md` |
-| P0.14 ⬜ | Restructure into a modular monolith: `inventory`, `booking`, `payment` modules + `ticketing-app`; ArchUnit boundary tests *(rev)* | Maven modules |
+| P0.14 ✅ | Restructure into a modular monolith: `inventory`, `booking`, `payment` modules + `ticketing-app`; ArchUnit boundary tests *(rev)* | Maven modules |
 | P0.15 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
 
 **Why first:** multi-module now avoids painful restructuring later; contracts and UML first let each module be built against a fixed design.

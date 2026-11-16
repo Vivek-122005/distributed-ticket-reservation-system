@@ -13,7 +13,9 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 
 | Where | How it is applied | Status |
 |---|---|---|
-| `InventoryController` | Only HTTP concerns: path and header binding, validation trigger, status code | ✅ |
+| `inventory.web.InventoryController` | Only HTTP concerns: binding, validation trigger, status code, DTO mapping | ✅ |
+| `inventory.application.InventoryFacade` | Only delegation from the module API to use cases | ✅ P0.14 |
+| `inventory.application.CreateHoldUseCase` | Only the hold use case (renamed from `InventoryApplicationService`) | ✅ P0.14 |
 | `ApiExceptionHandler` | Only exception → error-response mapping | ✅ |
 | `SeatInventoryRepository` | Only seat persistence and the claim query | ✅ |
 | Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService` | ⬜ P1.3–P1.4, P2.1 |
@@ -62,8 +64,9 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | Where | How it is applied | Status |
 |---|---|---|
 | Use cases → outbound ports | Use cases depend on `HoldStore` / `SeatLockingStrategy` interfaces in the application layer; JPA/Redis classes implement them in `infrastructure` | ⬜ P1.3, P1.7 |
+| `InventoryController` → `InventoryApi` | The HTTP adapter depends on the module interface, not on the use-case class | ✅ P0.14 |
 | Booking → `InventoryApi` | Booking depends on the interface; Spring wires the in-process or HTTP adapter | ⬜ P3.3 |
-| Domain → nothing | Domain classes import no Spring, JPA or Jackson; enforced by an ArchUnit rule | ⬜ P0.14 |
+| Domain → nothing | Domain classes import no Spring or Jackson, enforced by ArchUnit (`ModuleBoundaryTest.domainIsFrameworkFree`); JPA still tolerated (deviation #3) | 🔨 P0.14 |
 
 **Without it:** business code imports JPA and HTTP clients directly, so it can't be unit-tested, can't swap strategies and can't be extracted.
 
@@ -75,9 +78,9 @@ Found by reviewing the bootstrap code (`inventory-service`, commit `37138c8`) ag
 
 | # | Deviation | Principle | Fixed in |
 |---|---|---|---|
-| 1 | `InventoryApplicationService` returns `api.HoldResponse`, so the application layer depends on the inbound adapter | DIP | P1.3: return a domain/application result; the controller maps it to the DTO |
-| 2 | `InventoryApplicationService` uses Spring Data repositories from `infrastructure` directly, with no port interface | DIP | P1.3: introduce `HoldStore` / `SeatClaimPort`, implemented by JPA adapters |
+| 1 | ~~`InventoryApplicationService` returns `api.HoldResponse`, so the application layer depends on the inbound adapter~~ | DIP | ✅ **Fixed in P0.14:** the use case returns `api.HoldResult`; `web.InventoryController` maps it to `HoldResponse`. ArchUnit rule `applicationDoesNotDependOnWeb` prevents regression |
+| 2 | `CreateHoldUseCase` uses Spring Data repositories from `infrastructure` directly, with no port interface | DIP | P1.3: introduce `HoldStore` / `SeatClaimPort`, implemented by JPA adapters |
 | 3 | `domain.Hold` carries JPA annotations, so the domain depends on persistence | DIP | P1.3: separate the persistence entity from the domain model, or document the pragmatic exception in an ADR |
-| 4 | One service class will grow to hold, confirm and release | SRP | P1.4: one use-case class per operation |
+| 4 | ~~One service class will grow to hold, confirm and release~~ | SRP | ✅ **Fixed in P0.14:** `CreateHoldUseCase` behind `InventoryFacade`; confirm/release get their own use cases in P1.4 |
 | 5 | Stored `HoldStatus.ACTIVE` vs API `HELD`: two names for one state | (consistency) | P1.3 |
-| 6 | No ArchUnit rules yet, so the boundaries are convention only | — | P0.14 |
+| 6 | ~~No ArchUnit rules yet, so the boundaries are convention only~~ | — | ✅ **Fixed in P0.14:** 9 rules in `ModuleBoundaryTest`, plus `ModuleBoundaryRulesBiteTest`, which proves a planted violation fails |

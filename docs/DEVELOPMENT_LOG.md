@@ -183,3 +183,25 @@ A running record of **what was built, in which phase, in which part of the syste
 - **How it was verified:** all 29 Mermaid diagrams in `docs/` parse with Mermaid 11.4.1. The class names match the API contracts (P0.11) and the pattern registry (P0.10).
 - **ADR:** none
 
+### P0.14 — Modular-monolith restructure with ArchUnit boundaries
+- **Date:** 2026-11-16
+- **Module / files:** `inventory/` (code moved from `inventory-service/` with `git mv`), `booking/`, `payment/` (skeletons), `ticketing-app/` (new Boot app + `ModuleBoundaryTest`), root `pom.xml`, `README.md`, LLD registries
+- **What was built:**
+  - **Modules:** the inventory code now lives in the `inventory` library module under `com.vivek.ticketreservation.inventory`, with five layers: `api`, `web`, `application`, `domain` and `infrastructure`. Empty `booking` and `payment` modules hold the place for Phases 3–4. `ticketing-app` is the single Spring Boot deployable that bundles all three. Flyway migrations move to a per-module folder.
+  - **Published API:** `api/InventoryApi` (with `HoldCommand`, `HoldResult` and `SeatUnavailableException`) is implemented by a package-private `InventoryFacade`. The facade delegates to `CreateHoldUseCase` (formerly `InventoryApplicationService`). The controller now maps `HoldResult` to the HTTP DTO.
+  - **Boundary tests:** 9 ArchUnit rules cover module access only through `..api`, no dependency on booking, a framework-free domain, `common` as a leaf, and hexagonal layer order. `ModuleBoundaryRulesBiteTest` proves the main rule really fails on a planted violation.
+- **Why this approach:**
+  - **Proving ADR 002 in code:** the modular monolith is only real if its boundaries are *checked*. ArchUnit turns "booking must only use `inventory.api`" from a convention into a failing build.
+  - **Separate `api` and `web` packages:** `api` is the module's port for other modules and stays transport-free; `web` is just one adapter (HTTP). When inventory is extracted (P7.8), the HTTP adapter for `InventoryApi` simply implements the same interface.
+  - **Package-private facade:** other modules *can't* even reference the implementation class, so the compiler joins ArchUnit in guarding the boundary.
+  - **"Rules bite" test:** a rule that never fails proves nothing, for example if a package pattern were misspelled. The planted violation shows the rule detects real access.
+  - **Fixed SOLID deviations #1 (DIP) and #4 (SRP), and added the missing boundary checks (#6).** Deviation #3 (JPA annotations in `domain.Hold`) is still tolerated by the domain rule, with an explicit comment pointing to P1.3.
+- **Alternatives considered:**
+  - **Spring Modulith:** see ADR 002. Packages-in-one-jar loses compile-time boundaries.
+  - **Keeping `inventory-service` as the deployable and adding the others as libraries to it:** the name would lie about what the app is, and extraction would need a rename later anyway.
+  - **Maven `dependency:analyze` / Enforcer bans:** these work at artifact level only. They can't express "booking may use `inventory.api` but not `inventory.domain`" inside one dependency.
+  - **Creating `booking`/`payment` only in P3/P4:** possible, but the boundary rules (no dependency on booking) are best in place *before* the first booking class exists.
+- **How it was verified:** `mvn verify` from the root builds all 6 reactor modules: BUILD SUCCESS, 10 tests, 0 failures, and `ticketing-app` repackaged as a runnable jar. ArchUnit ran with `resolveMissingDependenciesFromClassPath=false`, so it analyses only our classes, independent of the local JDK (27). **Not verified:** the app was not started against Postgres because Docker was not running. Spring wiring of the package-private facade and the Flyway location change are covered by the Testcontainers context test in P0.15.
+- **Note:** the old `inventory-service/target/` build output may still exist locally. It is gitignored and safe to delete.
+- **ADR:** [002](adr/002-modular-monolith-first.md) (implemented)
+

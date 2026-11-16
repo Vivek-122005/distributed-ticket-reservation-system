@@ -18,22 +18,46 @@
 
   <modules>
     <module>common</module>
-    <module>inventory-service</module>
+    <module>inventory</module>
+    <module>booking</module>
+    <module>payment</module>
+    <module>ticketing-app</module>
   </modules>
 
   <properties>
     <java.version>21</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <testcontainers.version>1.20.6</testcontainers.version>
+    <archunit.version>1.4.1</archunit.version>
   </properties>
 
   <dependencyManagement>
     <dependencies>
-      <!-- Internal modules: versioned once here, referenced without a version by services. -->
+      <!-- Internal modules: versioned once here, referenced without a version by other modules. -->
       <dependency>
         <groupId>com.vivek</groupId>
         <artifactId>common</artifactId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.vivek</groupId>
+        <artifactId>inventory</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.vivek</groupId>
+        <artifactId>booking</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.vivek</groupId>
+        <artifactId>payment</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>${archunit.version}</version>
       </dependency>
       <dependency>
         <groupId>org.testcontainers</groupId>

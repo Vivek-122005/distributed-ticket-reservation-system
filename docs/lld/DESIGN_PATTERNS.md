@@ -23,7 +23,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 6 | [State](#6-state) | Behavioural (GoF) | ⬜ P1.3, P3.2, P4.2 | `ShowSeat`, `Hold`, `Booking`, `Payment` |
 | 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ⬜ P1.7 | `SeatLockingStrategy` |
 | 8 | [Adapter](#8-adapter) | Structural (GoF) | ⬜ P4.1, P3.3 | `PaymentGateway`, `InventoryApi` adapters |
-| 9 | [Facade](#9-facade) | Structural (GoF) | ⬜ P0.14 | `InventoryApi`, `PaymentApi` |
+| 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
 | 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | ⬜ P3.4, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
@@ -39,36 +39,36 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 ---
 
 ## 1. Ports & Adapters (Hexagonal)
-- **Status:** 🔨 the layout exists; the ports are not yet interfaces (see [SOLID.md, known deviations](SOLID.md#known-deviations-to-fix)).
-- **Where:** `inventory-service/src/main/java/com/vivek/ticketreservation/{api,application,domain,infrastructure}`.
+- **Status:** 🔨 the inbound side is done: `web` (HTTP adapter) → `api.InventoryApi` (port) → `application`. Outbound ports (repositories behind interfaces) are still missing; see [SOLID.md, known deviations](SOLID.md#known-deviations-to-fix) #2.
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/{api,web,application,domain,infrastructure}`. `api` = published module port + DTOs; `web` = inbound HTTP adapter. Layer rules are enforced by `ticketing-app/src/test/java/com/vivek/ticketreservation/architecture/ModuleBoundaryTest.java`.
 - **Problem:** business rules (who may hold a seat) must not depend on HTTP, JPA or Redis, because the locking implementation has to be swappable for the benchmark (P1.7) and modules must be extractable later (ADR 002).
 - **Why:** the domain and use cases sit in the centre. `api` is the inbound adapter. `infrastructure` holds outbound adapters behind port interfaces.
 - **Alternative:** classic layered architecture (controller → service → DAO). It is simpler, but the service layer then depends on persistence details, and swapping a locking strategy touches business code.
 
 ## 2. Repository
 - **Status:** ✅
-- **Where:** `infrastructure/HoldRepository.java`, `infrastructure/SeatInventoryRepository.java` (Spring Data JPA).
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/infrastructure/HoldRepository.java`, `SeatInventoryRepository.java` (Spring Data JPA).
 - **Problem:** use cases need to load and save aggregates without writing SQL plumbing.
 - **Why:** a collection-like interface per aggregate. Spring Data generates the common methods; hot paths use explicit native queries.
 - **Alternative:** a hand-written DAO with `JdbcTemplate`. That gives more control but more boilerplate. It is still available for the hot claim query if JPA overhead shows up in P9.5.
 
 ## 3. Compare-and-Set (conditional update)
 - **Status:** ✅ (single seat per statement; batched form in P1.1, lazy expiry in P1.2)
-- **Where:** `SeatInventoryRepository.claimAvailableSeat`: `UPDATE … SET status='HELD' … WHERE … AND status='AVAILABLE'`; called by `InventoryApplicationService.createHold`.
+- **Where:** `SeatInventoryRepository.claimAvailableSeat`: `UPDATE … SET status='HELD' … WHERE … AND status='AVAILABLE'`; called by `inventory.application.CreateHoldUseCase.execute`.
 - **Problem:** thousands of concurrent requests for the same seat; exactly one may win.
 - **Why:** Postgres re-checks the `WHERE` under the row lock, so the update is an atomic check-and-set. Losers see `0 rows` immediately. All seats are claimed in one transaction, in sorted order: all-or-nothing, and no deadlocks.
 - **Alternative:** `SELECT … FOR UPDATE` then `UPDATE` (pessimistic) holds locks longer; an optimistic `version` check retries a lot under contention. Both are benchmarked in P1.7–P1.8.
 
 ## 4. Data Transfer Object
 - **Status:** ✅
-- **Where:** `api/CreateHoldRequest.java`, `api/HoldResponse.java`, `api/ApiError.java` (Java records).
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/web/CreateHoldRequest.java`, `HoldResponse.java`, `ApiError.java` (HTTP DTOs); `inventory/src/main/java/com/vivek/ticketreservation/inventory/api/HoldCommand.java`, `HoldResult.java` (module-API DTOs, transport-free). All Java records.
 - **Problem:** the HTTP contract must not leak JPA entities, and must stay stable when the schema changes.
 - **Why:** immutable records with Bean Validation annotations. The contract is defined in `docs/api/*.yaml`.
 - **Alternative:** returning entities directly. Less code, but it couples the API to the schema and risks lazy-loading errors.
 
 ## 5. Centralised exception translation
 - **Status:** ✅
-- **Where:** `api/ApiExceptionHandler.java` (`@RestControllerAdvice`).
+- **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/web/ApiExceptionHandler.java` (`@RestControllerAdvice`).
 - **Problem:** every endpoint must map domain failures to the same error shape (`code`, `message`, `retryable`, `timestamp` from P1.3).
 - **Why:** one place maps exception → HTTP status → stable error code, and controllers stay free of try/catch.
 - **Alternative:** try/catch in each controller. Duplicated, and error codes drift.
@@ -92,8 +92,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** calling the Razorpay SDK directly from use cases. Failure injection becomes impossible and the vendor locks in.
 
 ## 9. Facade
-- **Status:** ⬜ P0.14
-- **Plan:** each module exposes one public package, `…inventory.api`, with `InventoryApi` and DTOs. Everything else is package-private or internal, and ArchUnit fails the build if another module imports internals.
+- **Status:** 🔨 inventory done in P0.14: `api/InventoryApi.java` implemented by package-private `application/InventoryFacade.java`, which delegates to one use case per operation. `PaymentApi` follows in P4.1.
+- **Design:** each module exposes one public package, `…inventory.api`, with `InventoryApi` and DTOs. Everything else is package-private or internal, and ArchUnit fails the build if another module imports internals.
 - **Why:** a narrow, stable entry point per module is what makes extraction (ADR 002) a mechanical swap.
 - **Alternative:** modules calling each other's services and repositories directly. Fast at first, but they become entangled.
 

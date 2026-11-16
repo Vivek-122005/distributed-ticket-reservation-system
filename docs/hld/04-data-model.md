@@ -2,7 +2,7 @@
 
 One PostgreSQL instance, **one schema per service** (`inventory`, `booking`, `payment`, `notification`, …). Each service connects with its own DB user that can only access its own schema. This gives database-per-service ownership without running many Postgres containers on a laptop; splitting into separate instances later is a configuration change.
 
-> Current state: the `inventory-service` V1 migration uses the default schema with `events` + `seat_inventory`. The show-based model below replaces it in the `inventory` schema with the V2 migration (P1.0).
+> Current state: the `inventory` module's V1 migration (`inventory/src/main/resources/db/migration/inventory/`) uses the default schema with `events` + `seat_inventory`. The show-based model below replaces it in the `inventory` schema with the V2 migration (P1.0).
 
 ## 4.1 Inventory schema (inventory module) *(rev: Venue / Show model)*
 
