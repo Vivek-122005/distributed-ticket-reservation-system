@@ -147,3 +147,21 @@ A running record of **what was built, in which phase, in which part of the syste
 - **How it was verified:** both files pass `openapi-spec-validator` (OpenAPI 3.1). A script confirmed that every `$ref` resolves and that no component is unused. Only `POST /events/{eventId}/holds` exists in code today; the spec documents that it moves to the show-based path in P1.0.
 - **ADR:** none
 
+### P0.12 — SRS, use cases and activity diagrams
+- **Date:** 2026-11-16
+- **Module / files:** `docs/srs/SRS.md`, `docs/srs/use-cases.md`
+- **What was built:**
+  - **SRS:** purpose, scope, glossary, 5 actors, constraints and assumptions; 16 functional requirements (FR-01…16) with priority, use case and plan part; 11 non-functional requirements (NFR-01…11), each with how it is measured; 6 business rules.
+  - **Use cases:** a use-case diagram and 9 use-case specifications with alternative flows.
+  - **Activity diagrams:** checkout (hold → pay → confirm/refund/unknown), payment reconciliation, waiting-room admission, and show scheduling.
+- **Why this approach:**
+  - **Traceability:** reviewers expect a requirement → use case → design → test chain. IDs make it traceable, and future tests will be named after FR/NFR IDs.
+  - **Alternative flows hold the hard cases:** taken seat, retries, unknown payment and late capture are where the interesting design lives, so they are written out explicitly.
+  - **Measurable NFRs:** every non-functional requirement says *how* it is measured (invariant checker, k6, chaos test), so none of them is an unverifiable claim.
+- **Alternatives considered:**
+  - **Full IEEE 830 template:** too much boilerplate for a project of this size. Kept its structure, dropped empty sections.
+  - **User stories only:** good for backlog grooming, but weak on alternative flows and non-functional requirements.
+  - **PlantUML for real UML use-case notation:** it needs a renderer; GitHub doesn't render it natively. Mermaid flowcharts approximate the notation (noted in the file).
+- **How it was verified:** all diagrams parse with Mermaid 11.4.1. Each FR maps to an existing plan part, and each use case links back to its FRs.
+- **ADR:** none
+
