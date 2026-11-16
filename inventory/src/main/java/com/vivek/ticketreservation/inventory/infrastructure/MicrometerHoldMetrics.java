@@ -1,11 +1,13 @@
 package com.vivek.ticketreservation.inventory.infrastructure;
 
 import com.vivek.ticketreservation.inventory.application.port.HoldMetrics;
+import com.vivek.ticketreservation.inventory.domain.event.HoldExpired;
 import com.vivek.ticketreservation.inventory.infrastructure.locking.LockingProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Duration;
 import java.util.EnumMap;
@@ -20,6 +22,8 @@ import java.util.Map;
  *   <li>{@code hold_latency_seconds{outcome, strategy}}: histogram with SLO buckets, for p50/p95/p99
  *       (NFR-03: p95 &lt; 250 ms, p99 &lt; 500 ms)</li>
  *   <li>{@code hold_transitions_total{operation, outcome}}: confirm / release results</li>
+ *   <li>{@code holds_expired_total} / {@code seats_released_by_expiry_total}: expiry worker output (P2.1),
+ *       counted from committed {@link HoldExpired} events only</li>
  * </ul>
  * The {@code strategy} tag lets dashboards compare locking strategies under the same load (P1.8, P9).
  * Meters are created once and cached, so the hot path does no registry lookups.
@@ -30,6 +34,8 @@ class MicrometerHoldMetrics implements HoldMetrics {
     private final Map<Outcome, Counter> attempts = new EnumMap<>(Outcome.class);
     private final Map<Outcome, Timer> latency = new EnumMap<>(Outcome.class);
     private final Counter conflicts;
+    private final Counter expiredHolds;
+    private final Counter expiredSeats;
 
     MicrometerHoldMetrics(MeterRegistry registry, LockingProperties locking) {
         this.registry = registry;
@@ -46,6 +52,15 @@ class MicrometerHoldMetrics implements HoldMetrics {
         }
         conflicts = Counter.builder("seat.hold.conflicts").description("Hold requests rejected because a seat was taken")
                 .tag("strategy", strategy).register(registry);
+        expiredHolds = Counter.builder("holds.expired").description("Holds expired by the worker").register(registry);
+        expiredSeats = Counter.builder("seats.released.by.expiry").description("Seats returned to stock by expiry").register(registry);
+    }
+
+    /** Observer of the expiry worker: runs only after the expiry transaction committed. */
+    @TransactionalEventListener
+    void on(HoldExpired event) {
+        expiredHolds.increment();
+        expiredSeats.increment(event.releasedSeatCodes().size());
     }
 
     @Override

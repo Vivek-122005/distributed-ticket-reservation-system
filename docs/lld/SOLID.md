@@ -20,7 +20,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `ConditionalUpdateStrategy` | Only the hot seat-claim statement | ✅ P1.1 |
 | `JdbcHoldStore`, `JdbcShowStore` | Only row ↔ aggregate mapping for one table each | ✅ P1.3 |
 | `Hold`, `ShowSeat`, `Show` | Only their own state rules; no persistence or HTTP | ✅ P1.3 |
-| Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`; `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService`; the shared result mapping lives once in `HoldViews` | ✅ P1.4; job ⬜ P2.1 |
+| Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`; `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService`; the shared result mapping lives once in `HoldViews`. Expiry: *what* to do is in `ExpireHoldsJob`, *when* (scheduling, batching, poison isolation) in `infrastructure.ScheduledHoldExpiry` | ✅ P1.4, P2.1 |
 | `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
 | `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
 
@@ -66,6 +66,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | Where | How it is applied | Status |
 |---|---|---|
 | Use cases → outbound ports | `CreateHoldUseCase` depends on `application.port.{ShowStore, HoldStore, SeatLockingStrategy}`; package-private JDBC adapters in `infrastructure` implement them. ArchUnit `applicationDependsOnPortsNotAdapters` | ✅ P1.3 (more strategies P1.7) |
+| `ExpireHoldsJob` → `InventoryEventPublisher` | The job publishes domain events through a port; today Spring events, later the outbox (P5.2), with no change to the job | ✅ P2.1 |
 | Facade → `HoldMetrics` | Business metrics go through an application port; Micrometer lives only in `infrastructure.MicrometerHoldMetrics` | ✅ P1.9 |
 | `InventoryController` → `InventoryApi` | The HTTP adapter depends on the module interface, not on the use-case class | ✅ P0.14 |
 | Booking → `InventoryApi` | Booking depends on the interface; Spring wires the in-process or HTTP adapter | ⬜ P3.3 |

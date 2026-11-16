@@ -18,6 +18,12 @@ public interface ShowSeatStore {
     /** HELD → AVAILABLE for the seats this hold still owns. @return number of seats released. */
     int releaseSeatsOf(UUID holdId);
 
+    /**
+     * HELD → AVAILABLE for every seat these holds still own, in one batch.
+     * @return released seat codes per hold id (holds that own no seat any more are absent)
+     */
+    java.util.Map<UUID, List<String>> releaseSeatsOfHolds(List<UUID> holdIds);
+
     /** Seat codes with their frozen prices (BR-05), in seat-code order. */
     List<PricedSeat> prices(UUID showId, List<String> seatCodes);
 

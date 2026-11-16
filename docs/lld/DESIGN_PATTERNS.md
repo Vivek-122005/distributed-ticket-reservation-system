@@ -28,7 +28,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
 | 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | ⬜ P3.4, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
 | 13 | [Template Method](#13-template-method) | Behavioural (GoF) | ⬜ P5.5 | `IdempotentEventConsumer` |
-| 14 | [Observer / Publish-Subscribe](#14-observer--publish-subscribe) | Behavioural (GoF) | ⬜ P5, P5.11 | domain events → Kafka → consumers |
+| 14 | [Observer / Publish-Subscribe](#14-observer--publish-subscribe) | Behavioural (GoF) | 🔨 in-process ✅ P2.1; Kafka ⬜ P5 | `InventoryEventPublisher` → `@TransactionalEventListener`s; later outbox → Kafka |
 | 15 | [Factory](#15-factory) | Creational (GoF) | ⬜ P5.1 | `EventEnvelopeFactory` |
 | 16 | [Builder](#16-builder) | Creational (GoF) | ⬜ P3.6 (not needed in P1.6) | test-data builders |
 | 17 | [Chain of Responsibility](#17-chain-of-responsibility) | Behavioural (GoF) | ⬜ P6.1–P6.5 | gateway filters |
@@ -168,7 +168,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** copying the dedup code into every consumer, which drifts. Composition with a decorator would also work; Template Method is clearer when the skeleton is fixed.
 
 ## 14. Observer / Publish-Subscribe
-- **Status:** ⬜ P5.6–P5.8, P5.11
+- **Status:** 🔨 in-process stage ✅ (P2.1): the application port `inventory.application.port.InventoryEventPublisher` publishes framework-free domain events (`inventory.domain.event.HoldExpired`). The adapter `infrastructure.SpringInventoryEventPublisher` uses Spring application events, and observers react with `@TransactionalEventListener` (after commit only), for example `MicrometerHoldMetrics.on(HoldExpired)`. The durable stage (outbox → Kafka, consumers in other services) is ⬜ P5; it swaps only the adapter.
 - **Plan:** modules publish domain events (via the outbox). Notification, ticket, analytics and the WebSocket push subscribe through Kafka consumer groups.
 - **Why:** producers don't know or wait for consumers, and new consumers need no producer change (OCP at system level).
 - **Alternative:** direct synchronous calls to each side effect. These couple booking latency and availability to email or ticket services.

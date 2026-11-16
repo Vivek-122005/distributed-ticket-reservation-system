@@ -585,3 +585,59 @@ A running record of **what was built, in which phase, in which part of the syste
 - **ADR:** none
 
 **Phase 1 complete.** Seat holds are correct under contention, checked against five interchangeable strategies, mutation-tested, benchmarked (ADR 003) and metered.
+
+---
+
+## Phase 2 — Hold expiry, Redis fast path & reconciliation
+
+### P2.1 — Hold expiry worker
+- **Date:** 2026-11-16
+- **Module / files:**
+  - **Expiry job:** `inventory.application.ExpireHoldsJob`, `infrastructure.ScheduledHoldExpiry`, `infrastructure.SchedulingConfig`.
+  - **Events:** `domain.event.HoldExpired`, `application.port.InventoryEventPublisher` and its adapter `infrastructure.SpringInventoryEventPublisher`.
+  - **Ports and adapters:** `HoldStore` (+ `lockExpired`, `findExpiredIds`, `lockIfExpired`, `saveStatuses`), `ShowSeatStore` (+ `releaseSeatsOfHolds`), `JdbcHoldStore`, `JdbcShowSeatStore`.
+  - **Metrics:** `MicrometerHoldMetrics` (expiry metrics).
+  - **Migration:** `V6__backfill_hold_seat_codes.sql`.
+  - **Config:** `application.yml` (`inventory.expiry.*`), test `application.properties`.
+  - **Tests:** `ExpireHoldsJobIT`, `infrastructure/ScheduledHoldExpiryIT`.
+  - **Docs:** plan, registries, class diagram.
+- **What was built:**
+  - **Scheduling:** every 5 s (`EXPIRY_INTERVAL`), the worker drains up to 20 batches of 500 holds, each batch its own short transaction.
+  - **Selecting a batch:** each batch locks the oldest due `HELD` holds with `FOR UPDATE SKIP LOCKED`, and the `Hold` aggregate re-checks each one.
+  - **Releasing seats:** the seats each hold *still owns* are released in one locked select and one update.
+  - **Recording the outcome:** the holds are marked `EXPIRED` in one batch statement, and one `HoldExpired` event is published per hold, listing the seats actually released.
+  - **Metrics from events:** `holds_expired_total` and `seats_released_by_expiry_total` are counted by an after-commit observer, so a rolled-back batch counts nothing.
+  - **Poison-row isolation:** if a batch fails, its holds are retried one by one in separate transactions. Failures are skipped, logged and counted (`hold_expiry_failures_total`).
+- **Why this approach:**
+  - **Cleanup, not availability:** since P1.2 an expired seat is already sellable, so this job only makes the stored state truthful (seat map, hold history) and tells others the hold is over. A slow worker therefore costs freshness, never sales.
+  - **`SKIP LOCKED` and the same lock order as confirm/release (hold, then seats):** several replicas can run the job without a leader and without waiting on each other. A hold being confirmed at that moment is skipped, and once confirmed it is no longer due. (Measured with many workers in P2.2.)
+  - **Seats released only `WHERE hold_id = this hold`:** a seat someone re-held after expiry is never freed (tested).
+  - **Events through a port, after commit:**
+    - **Interim delivery:** in-process delivery is enough for metrics and the cache (P2.3), and it is honest about the gap: it isn't durable.
+    - **Durable later:** the outbox (P5.2) replaces the adapter only, and reconciliation (P2.5) repairs anything a lost event leaves behind.
+  - **Many small transactions instead of one big one:** a backlog after an outage is worked off without holding thousands of row locks at once.
+- **Problem found by the smoke test (and fixed):**
+  - **Symptom:** run against the existing Compose database, the worker failed on *every* tick.
+  - **Cause:** a hold created before V4 had an empty `seat_codes`. V4's `NOT VALID` check still applies when such a row is *updated*, so marking it `EXPIRED` violated the constraint. Because the worker takes the oldest holds first, the same poison row sat at the front of every batch, and no hold could expire at all.
+  - **Fix 1:** V6 back-fills seat codes from `show_seats`, deletes legacy holds that own nothing, and then `VALIDATE`s the constraint.
+  - **Fix 2:** the worker's one-by-one fallback means a future bad row costs one hold, not the whole job. This is tested with a trigger that makes one hold impossible to update.
+  - **Lesson recorded:** `NOT VALID` constraints still bite on `UPDATE`, so plan a back-fill with them.
+- **Alternatives considered:**
+  - **Postgres `pg_cron` doing the update in SQL:** no Java, but no events, no metrics and no domain re-check, and it adds an extension.
+  - **A delay queue (Redis sorted set or Kafka timers):** precise timing, but another system to keep consistent. Lazy expiry already makes timing non-critical.
+  - **One transaction per hold always:** simplest isolation, but about 500× more transactions under normal load. Batching is the normal path, and per-hold is only the fallback.
+  - **ShedLock / leader election:** not needed with `SKIP LOCKED`. Compared in P2.2.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 135 tests and 1 skipped (benchmark).
+  - **`ExpireHoldsJobIT`:**
+    - due holds expire, their seats are released, and events arrive after commit with the right seats;
+    - a lazily re-held seat is untouched and not listed;
+    - confirmed and released holds are ignored;
+    - batches drain 4 + 4 + 2.
+  - **`ScheduledHoldExpiryIT`:** a poison hold is skipped and counted while the others expire.
+  - **Smoke test of the packaged jar (1 s interval) against the Compose database:**
+    - V6 repaired 1 legacy row, and the constraint is now validated;
+    - the worker expired the 2 previously stuck holds plus a new test hold within 3 s;
+    - `holds_expired_total` = 3, `seats_released_by_expiry_total` = 4, `hold_expiry_failures_total` = 0.
+- **Environment note:** Docker Desktop restarted during this part and stopped the Compose containers. They were brought back with `POSTGRES_PORT=55432 docker compose up -d postgres redis`.
+- **ADR:** none

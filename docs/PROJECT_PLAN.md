@@ -497,13 +497,13 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 2 — Hold expiry, Redis fast path & reconciliation ⬜
+### Phase 2 — Hold expiry, Redis fast path & reconciliation 🔨
 
 **Goal:** expired holds return to stock quickly; hot reads and obvious losers never touch Postgres.
 
 | Part | Task | Details / why |
 |---|---|---|
-| P2.1 | Expiry worker | Scheduled job: `SELECT … WHERE status='HELD' AND expires_at < now() FOR UPDATE SKIP LOCKED LIMIT 500` → release. `SKIP LOCKED` lets several worker replicas run without blocking each other. Emits `HoldExpired`. |
+| P2.1 ✅ | Expiry worker | `ExpireHoldsJob` + `ScheduledHoldExpiry` (every 5 s, batches of 500): `SELECT … WHERE status='HELD' AND expires_at < now() ORDER BY expires_at FOR UPDATE SKIP LOCKED LIMIT 500` → hold `EXPIRED`, seats it still owns → `AVAILABLE`. Emits `HoldExpired` after commit (in-process port until the outbox, P5.2). A failing batch is retried hold-by-hold so one poison row can't stall the worker (found in the smoke test; V6 repaired the legacy rows). Metrics `holds_expired_total`, `seats_released_by_expiry_total`, `hold_expiry_failures_total`. |
 | P2.2 | ShedLock / leader election (if needed) | Compare "every replica with SKIP LOCKED" vs "single leader". Document choice. |
 | P2.3 | Redis availability cache | Per `event:section` hash/bitmap of seat states, updated on hold/release/confirm (via outbox events). Seat map reads served from Redis. |
 | P2.4 | Fast-reject Lua script | **Outside the DB transaction, before a connection is taken (ADR 003: Redis inside the transaction exhausted the pool when Redis hung).** Before hitting Postgres, Lua atomically checks + marks seats `PENDING` in Redis; if already taken → reject in < 1 ms. Postgres still decides; on Postgres failure Redis mark is rolled back. Shows "cache as filter, DB as authority". |

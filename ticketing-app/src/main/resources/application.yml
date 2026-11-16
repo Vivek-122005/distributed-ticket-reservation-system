@@ -15,6 +15,12 @@ spring:
     # history table stays in public until booking gets its own migrations (P3.1).
     locations: classpath:db/migration/inventory
 inventory:
+  expiry:
+    # P2.1: cleanup of expired holds (availability does not depend on it, see lazy expiry P1.2).
+    enabled: ${EXPIRY_ENABLED:true}
+    interval: ${EXPIRY_INTERVAL:5s}
+    batch-size: 500
+    max-batches: 20
   locking:
     # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
     strategy: ${LOCKING_STRATEGY:conditional-update}

@@ -28,4 +28,20 @@ public interface HoldStore {
 
     /** Writes the hold's current status. */
     void saveStatus(Hold hold);
+
+    /**
+     * Locks up to {@code limit} HELD holds whose expiry has passed (database clock), oldest first,
+     * skipping rows another transaction already holds ({@code FOR UPDATE SKIP LOCKED}). Several expiry
+     * workers can therefore run at once and never pick the same hold or wait for each other.
+     */
+    List<Hold> lockExpired(int limit);
+
+    /** Ids of HELD holds past expiry, oldest first, without locking (for the one-by-one fallback). */
+    List<UUID> findExpiredIds(int limit);
+
+    /** Locks one hold if it is still HELD and past expiry; empty if it changed or another worker has it. */
+    Optional<Hold> lockIfExpired(UUID holdId);
+
+    /** Writes the status of every hold in one statement. */
+    void saveStatuses(List<Hold> holds);
 }

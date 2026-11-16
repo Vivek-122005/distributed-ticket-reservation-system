@@ -61,6 +61,36 @@ class JdbcHoldStore implements HoldStore {
     }
 
     @Override
+    public List<Hold> lockExpired(int limit) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM inventory.holds"
+                + " WHERE status = 'HELD' AND expires_at < now()"
+                + " ORDER BY expires_at LIMIT :limit"
+                + " FOR UPDATE SKIP LOCKED", new MapSqlParameterSource("limit", limit), HOLD);
+    }
+
+    @Override
+    public List<UUID> findExpiredIds(int limit) {
+        return jdbc.queryForList("SELECT id FROM inventory.holds WHERE status = 'HELD' AND expires_at < now()"
+                + " ORDER BY expires_at LIMIT :limit", new MapSqlParameterSource("limit", limit), UUID.class);
+    }
+
+    @Override
+    public Optional<Hold> lockIfExpired(UUID holdId) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM inventory.holds"
+                + " WHERE id = :id AND status = 'HELD' AND expires_at < now() FOR UPDATE SKIP LOCKED",
+                new MapSqlParameterSource("id", holdId), HOLD).stream().findFirst();
+    }
+
+    @Override
+    public void saveStatuses(List<Hold> holds) {
+        if (holds.isEmpty()) return;
+        MapSqlParameterSource[] batch = holds.stream()
+                .map(h -> new MapSqlParameterSource("status", h.status().name()).addValue("id", h.id()))
+                .toArray(MapSqlParameterSource[]::new);
+        jdbc.batchUpdate("UPDATE inventory.holds SET status = :status WHERE id = :id", batch);
+    }
+
+    @Override
     public void saveStatus(Hold hold) {
         jdbc.update("UPDATE inventory.holds SET status = :status WHERE id = :id",
                 new MapSqlParameterSource("status", hold.status().name()).addValue("id", hold.id()));

@@ -211,6 +211,13 @@ classDiagram
     ShowSeatStore <|.. JdbcShowSeatStore
     DatabaseClock <|.. JdbcDatabaseClock
     ExpireHoldsJob --> HoldStore
+    ExpireHoldsJob --> ShowSeatStore
+    ExpireHoldsJob --> InventoryEventPublisher
+    class InventoryEventPublisher {
+      <<interface>>
+      +publish(domainEvent)
+    }
+    ScheduledHoldExpiry --> ExpireHoldsJob
 ```
 
 | Class | Pattern / principle | Plan |
