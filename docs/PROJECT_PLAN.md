@@ -445,7 +445,7 @@ SOLID checkpoints per part: single-responsibility use cases (`CreateHoldUseCase`
 
 Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one small, reviewable change (one or a few commits) with a log entry.
 
-### Phase 0 — Foundations & design baseline 🔨
+### Phase 0 — Foundations & design baseline ✅
 
 **Goal:** a buildable skeleton and a written design so every later part has a home.
 
@@ -465,7 +465,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P0.12 ✅ | SRS: actors, use cases, use-case and activity diagrams *(rev)* | `docs/srs/` |
 | P0.13 ✅ | Domain class diagrams (inventory, booking, payment) *(rev)* | `docs/lld/class-diagrams.md` |
 | P0.14 ✅ | Restructure into a modular monolith: `inventory`, `booking`, `payment` modules + `ticketing-app`; ArchUnit boundary tests *(rev)* | Maven modules |
-| P0.15 ⬜ | Testcontainers base test setup; CI runs integration tests | test infra |
+| P0.15 ✅ | Testcontainers base test setup; CI runs integration tests | test infra |
 
 **Why first:** multi-module now avoids painful restructuring later; contracts and UML first let each module be built against a fixed design.
 

@@ -17,4 +17,6 @@ jobs:
           java-version: '21'
           cache: maven
       # Builds every module from the root parent POM, in dependency order.
+      # 'verify' runs unit/architecture tests (*Test, surefire) and then the
+      # Testcontainers integration tests (*IT, failsafe); ubuntu runners ship Docker.
       - run: mvn --batch-mode verify

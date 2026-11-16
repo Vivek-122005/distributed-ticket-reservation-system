@@ -27,7 +27,8 @@
   <properties>
     <java.version>21</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <testcontainers.version>1.20.6</testcontainers.version>
+    <!-- 1.21.x: Docker Engine 29 rejects the older default client API version (< 1.44). -->
+    <testcontainers.version>1.21.4</testcontainers.version>
     <archunit.version>1.4.1</archunit.version>
   </properties>
 

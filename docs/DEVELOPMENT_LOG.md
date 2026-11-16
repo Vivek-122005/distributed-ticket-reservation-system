@@ -205,3 +205,25 @@ A running record of **what was built, in which phase, in which part of the syste
 - **Note:** the old `inventory-service/target/` build output may still exist locally. It is gitignored and safe to delete.
 - **ADR:** [002](adr/002-modular-monolith-first.md) (implemented)
 
+### P0.15 — Testcontainers integration test base, run in CI
+- **Date:** 2026-11-16
+- **Module / files:** `ticketing-app/pom.xml` (Testcontainers, failsafe), `ticketing-app/src/test/java/.../support/` (`PostgresContainerConfig`, `@IntegrationTest`, `InventoryTestData`), `ApplicationStartupIT`, `inventory/CreateHoldIT`, root `pom.xml`, `.github/workflows/ci.yml`, `docker-compose.yml`, `README.md`
+- **What was built:**
+  - **Test base:** a reusable `@IntegrationTest` annotation that starts the full app on a random port against a real `postgres:16-alpine` container. The container is wired with `@ServiceConnection`, so no URLs are hard-coded.
+  - **Startup test (2 tests):** Flyway applies the module migration from its new folder, and `InventoryApi` is wired to the package-private facade. This closes the gap left open in P0.14.
+  - **Hold tests (4 tests, over HTTP):** a successful multi-seat hold; a conflicting request holds **nothing** (no partial seat held, and the failed hold row is rolled back); duplicate seat codes → 400; an unknown seat → 409.
+  - **Unit vs integration split:** `*Test` runs under surefire (fast, no Docker) and `*IT` under failsafe in `verify`. CI's existing `mvn verify` now runs both.
+- **Why this approach:**
+  - **Real Postgres, not H2:** the core guarantee depends on Postgres row locking and the conditional `UPDATE`. H2's locking differs, so a green H2 test would prove nothing (plan §6).
+  - **`@ServiceConnection` + Spring context caching:** one container per test run, shared by every IT class, keeps runs fast. Each test resets the seat data instead of restarting the database.
+  - **Separate surefire/failsafe phases:** architecture and unit feedback in seconds; Docker tests only in `verify`.
+  - **Testcontainers 1.21.4 instead of 1.20.6:** Docker Engine 29 (installed here) rejects client API versions below 1.44, which older Testcontainers used by default.
+- **Also fixed:** `docker-compose.yml` publishes Postgres on `${POSTGRES_PORT:-5432}`. On this laptop a Homebrew PostgreSQL already listens on `localhost:5432` and shadowed the container (`role "ticket" does not exist`). The README documents the override.
+- **Alternatives considered:**
+  - **Embedded Postgres (zonky):** no Docker needed, but it's a different distribution from production, and Testcontainers is reused for Redis and Kafka later.
+  - **One container per test class (`@Container` static field):** simpler to read, but slower and it multiplies Spring contexts.
+  - **`@DataJpaTest` slices only:** faster, but they miss the HTTP mapping and the full wiring the startup test checks.
+  - **Testcontainers reuse mode (`withReuse`):** faster locally, but leaves containers running and needs per-developer config. Can be added later.
+- **How it was verified:** `mvn verify` with BUILD SUCCESS. Surefire ran 10 tests (ArchUnit) and failsafe 6 tests against a real Postgres 16 container, 0 failures. Manual smoke test of the packaged jar against the Compose Postgres (port 55432): Flyway applied V1, `POST /events/{id}/holds` for A99+A100 → 201, holding A100 again → 409 `SEAT_UNAVAILABLE`, `/actuator/health` → UP. GitHub CI will be confirmed by the run on this push.
+- **ADR:** none
+

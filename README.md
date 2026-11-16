@@ -24,6 +24,15 @@ mvn install -DskipTests          # builds all modules from the root parent POM
 mvn -pl ticketing-app spring-boot:run
 ```
 
+If a local PostgreSQL already uses port 5432, move the Docker one:
+
+```bash
+POSTGRES_PORT=55432 docker compose up -d
+DB_URL=jdbc:postgresql://localhost:55432/ticket_reservation mvn -pl ticketing-app spring-boot:run
+```
+
+Tests: `mvn verify` runs unit and architecture tests, then integration tests against a throwaway PostgreSQL container (Testcontainers; Docker must be running).
+
 The app starts at `http://localhost:8080`.
 
 ```bash
