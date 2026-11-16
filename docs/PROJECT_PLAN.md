@@ -471,7 +471,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 1 — Inventory & reservation engine (the heart) 🔨
+### Phase 1 — Inventory & reservation engine (the heart) ✅
 
 **Goal:** provably correct seat holds under concurrency, plus a measured comparison of locking approaches.
 
@@ -486,7 +486,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P1.6 ✅ | **Concurrency test suite** | `SeatContentionIT` on Testcontainers Postgres (pool 50, virtual threads, one start gate): 500 attempts for 1 seat → exactly 1 winner; 2,000 for 100 seats → exactly 100, each once; 600 random overlapping multi-seat requests → no partial holds, no deadlocks; reversed pairs → no deadlock; expired-seat stampede → 1 winner; confirm racing release → exactly one wins. SQL invariant checker after each test. Mutation-checked: removing the status check or randomising lock order makes it fail. Runs in CI. |
 | P1.7 ✅ | `SeatLockingStrategy` (Strategy pattern) | Implementations: (a) **pessimistic** `SELECT … FOR UPDATE`, (b) **optimistic** `version` check + retry, (c) **conditional update** (default), (d) **Redis distributed lock** (`SET NX PX` + fencing token, locks freed after commit, lost counter re-seeded from Postgres; V5 `lock_fence`), (e) **Redis Lua** atomic multi-seat check-and-set as a filter decorating (c). Selected by `inventory.locking.strategy`; all five pass the same contract suite. |
 | P1.8 ✅ | Benchmark & ADR 003 | `LockingBenchmarkIT` (Java harness, opt-in): 4 workloads (hot seat, flash sale, multi-seat, uncontended) + Redis paused, invariants checked after every run. Results in `docs/results/locking-comparison.md`; ADR 003 picks the conditional update as authority and Redis Lua only as a filter *outside* the transaction (Redis inside the transaction exhausted the pool when Redis hung). |
-| P1.9 ⬜ | Inventory metrics | `seat_hold_attempts_total`, `seat_hold_conflicts_total`, `hold_latency_seconds` histogram. |
+| P1.9 ✅ | Inventory metrics | `seat_hold_attempts_total{outcome,strategy}`, `seat_hold_conflicts_total{strategy}`, `hold_latency_seconds` histogram (SLO buckets 50/100/250/500 ms, includes commit), `hold_transitions_total{operation,outcome}`; behind a `HoldMetrics` port, recorded by the facade. |
 
 **Key reasoning to document:**
 - *Pessimistic* — simple, correct, but holds row locks across the transaction → queueing on hot rows, deadlock risk with multi-seat.

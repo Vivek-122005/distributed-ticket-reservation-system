@@ -45,6 +45,7 @@ Five implementations of `SeatLockingStrategy` (P1.7), measured under the same fo
 | OPTIMISTIC | uncontended | 3592 | 278.6 | 539.3 | 583.8 | 2000 | 0 | 0 | 0 |
 | REDIS_LOCK | uncontended | 3250 | 337.7 | 766.2 | 843.4 | 2000 | 0 | 0 | 0 |
 | REDIS_LUA | uncontended | 4613 | 217.6 | 410.7 | 429.4 | 2000 | 0 | 0 | 0 |
+
 **Read this first:**
 - **The latencies are dominated by queueing:** thousands of attempts start at the same instant and share 50 connections. p50 of 150–600 ms is mostly waiting for a connection, not lock time. Compare strategies *with each other* in this table, not with NFR-03 (p95 < 250 ms at *admitted* load, behind the waiting room, which P9 measures).
 - **Laptop, one Docker VM, about 10% run-to-run noise:** small differences (for example 5,842 vs 5,965/s) are a tie.

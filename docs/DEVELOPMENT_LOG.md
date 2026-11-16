@@ -552,3 +552,36 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Choosing Redis Lua as the production strategy:** it is the fastest under contention, but in its current placement it is a single point of failure. ADR 003 keeps its benefit while removing the failure mode (P2.4/P2.6).
 - **How it was verified:** the benchmark run completed with every invariant check passing (output in the report). `mvn verify` without the flag passes (129 tests, with the benchmark skipped).
 - **ADR:** [003](adr/003-seat-locking-strategy.md)
+
+### P1.9 — Inventory business metrics
+- **Date:** 2026-11-16
+- **Module / files:** `inventory.application.port.HoldMetrics`, `inventory.infrastructure.MicrometerHoldMetrics`, `InventoryFacade` (records metrics), `inventory/pom.xml` (+ `micrometer-core`), `HoldMetricsIT`, README, plan, registries; a blank-line fix in the P1.8 report table
+- **What was built:**
+  - **Metrics exported at `/actuator/prometheus`:**
+    - `seat_hold_attempts_total{outcome, strategy}`, where `outcome` is `HELD`, `SEAT_UNAVAILABLE`, `SHOW_NOT_ON_SALE`, `SHOW_NOT_FOUND`, `INVALID_REQUEST` or `ERROR`;
+    - `seat_hold_conflicts_total{strategy}`;
+    - `hold_latency_seconds{outcome, strategy}`, a histogram with SLO buckets at 50, 100, 250 and 500 ms;
+    - `hold_transitions_total{operation, outcome}` for confirm and release results (for example `CONFIRMED` or `HOLD_EXPIRED`).
+  - **Where it's recorded:** the facade records each request after the use case returns or throws.
+- **Why this approach:**
+  - **Measured at the facade, outside the transaction:** latency then includes the commit, which is what a caller waits for. Inside the use case, the commit (and any lock wait at commit) would be invisible.
+  - **Port + adapter:** the application layer stays free of Micrometer (DIP). Tests or another backend can swap the implementation.
+  - **`strategy` tag:** dashboards can compare locking strategies under the same load (P9), continuing P1.8.
+  - **SLO buckets at 250 and 500 ms:** these map directly to NFR-03 (p95 < 250 ms, p99 < 500 ms), so P8.4 can build burn-rate alerts from the histogram.
+  - **Meters created once and cached:** the hot path does no registry lookups.
+  - **Conflicts as a separate counter:** "conflict rate" is the main business signal during a sale, and a dedicated series keeps the query simple.
+- **Problem found:** `/actuator/prometheus` returned 404 in tests. Spring Boot disables metrics export under `@SpringBootTest` unless `@AutoConfigureObservability` is present. The test now opts in. The packaged app was checked separately: the endpoint serves all four metrics.
+- **Alternatives considered:**
+  - **`@Timed` / `@Counted` annotations:** less code, but they can't tag by business outcome, and they put Micrometer annotations on application classes.
+  - **The Micrometer Observation API:** it would also create tracing spans (P8.1). It's worth revisiting then, but too much for counters today.
+  - **Logging and counting later:** loses real-time dashboards and alerting.
+- **How it was verified:**
+  - **`mvn verify`:** BUILD SUCCESS, 130 tests and 1 skipped (the benchmark).
+  - **`HoldMetricsIT`:** a hold, a conflict and a confirm over HTTP move exactly the expected series, and the 250 ms histogram bucket exists.
+  - **Packaged-jar smoke test against the Compose database:** V3–V5 applied on top of the existing data (V4's `NOT VALID` check let the old holds through), with the conditional-update strategy logged at startup:
+    - hold → 201, confirm → 200, conflict → 409;
+    - the seat map shows the booked seat;
+    - the four metric series are present, and health is `UP`.
+- **ADR:** none
+
+**Phase 1 complete.** Seat holds are correct under contention, checked against five interchangeable strategies, mutation-tested, benchmarked (ADR 003) and metered.

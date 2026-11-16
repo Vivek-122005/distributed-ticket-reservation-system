@@ -138,7 +138,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** calling the Razorpay SDK directly from use cases. Failure injection becomes impossible and the vendor locks in.
 
 ## 9. Facade
-- **Status:** 🔨 inventory done: `api/InventoryApi.java` (`hold`, `confirm`, `release`, `get`; P0.14 + P1.4) implemented by package-private `application/InventoryFacade.java`, which delegates to one use case per operation (`CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`). `PaymentApi` follows in P4.1.
+- **Status:** 🔨 inventory done: `api/InventoryApi.java` (`hold`, `confirm`, `release`, `get`; P0.14 + P1.4) implemented by package-private `application/InventoryFacade.java`, which delegates to one use case per operation (`CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`). `PaymentApi` follows in P4.1. Its only other job is metering (P1.9): it sits outside the use cases' transactions, so the recorded latency includes the commit.
 - **Design:** each module exposes one public package, `…inventory.api`, with `InventoryApi` and DTOs. Everything else is package-private or internal, and ArchUnit fails the build if another module imports internals.
 - **Why:** a narrow, stable entry point per module is what makes extraction (ADR 002) a mechanical swap.
 - **Alternative:** modules calling each other's services and repositories directly. Fast at first, but they become entangled.
