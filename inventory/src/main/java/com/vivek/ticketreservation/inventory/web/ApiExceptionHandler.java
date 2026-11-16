@@ -7,6 +7,7 @@ import com.vivek.ticketreservation.inventory.api.SeatUnavailableException;
 import com.vivek.ticketreservation.inventory.api.ShowNotFoundException;
 import com.vivek.ticketreservation.inventory.api.ShowNotOnSaleException;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -45,10 +46,13 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     ApiError malformed(Exception error) { return ApiError.of("INVALID_REQUEST", "Request is malformed or fails validation", false); }
 
-    /** Database or Redis unreachable: the request did nothing and may be retried later (schema Unavailable). */
-    @ExceptionHandler(DataAccessResourceFailureException.class)
+    /**
+     * Database or Redis unreachable or timing out, or a transient lock failure: the transaction was rolled
+     * back, nothing changed, and the same request may succeed later (schema Unavailable, retryable).
+     */
+    @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessException.class})
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
-    ApiError unavailable(DataAccessResourceFailureException error) {
+    ApiError unavailable(Exception error) {
         return ApiError.of("SERVICE_UNAVAILABLE", "A dependency is unavailable, retry with backoff", true);
     }
 

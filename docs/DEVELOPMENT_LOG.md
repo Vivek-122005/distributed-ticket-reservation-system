@@ -524,3 +524,31 @@ A running record of **what was built, in which phase, in which part of the syste
   
   Redis 7 runs in Testcontainers.
 - **ADR:** the choice between them is ADR 003, written in P1.8 from measurements.
+
+### P1.8 — Locking benchmark and ADR 003
+- **Date:** 2026-11-16
+- **Module / files:** `ticketing-app/src/test/java/.../inventory/infrastructure/locking/LockingBenchmarkIT.java` (opt-in harness), `docs/results/locking-comparison.md`, `docs/adr/003-seat-locking-strategy.md`, `ApiExceptionHandler` (transient data-access errors → 503), plan (P1.8, P2.4)
+- **What was built:**
+  - **Benchmark harness:** it builds each of the five strategies and runs it under the real `CreateHoldUseCase` inside a `TransactionTemplate`, in one Spring context with Postgres and Redis, on a 5,000-seat show.
+  - **Workloads:** hot seat (1,000 → 1), flash sale (5,000 → 500), overlapping multi-seat (2,000 requests of 2–4 seats over 50) and uncontended (2,000 → 2,000). Each runs 1 warm-up + 3 measured runs, and reports throughput, p50/p95/p99, winners, rejections, deadlocks and errors.
+  - **Failure run:** flash sale with the Redis container paused.
+  - **Correctness gate:** the invariant checker runs after every run, so a fast but wrong strategy can't produce a number.
+  - **ADR 003:** conditional update is the authority. Redis Lua becomes a filter outside the transaction with fail-open (P2.4/P2.6). Redis locks are rejected.
+- **Key results** (full table in the report):
+  - **Correctness:** all strategies kept every invariant with 0 deadlocks.
+  - **Uncontended:** conditional update is fastest (5,404/s vs 3,250–4,613).
+  - **Contention:** Redis Lua is best under contention (flash sale 7,948/s, +36%; multi-seat +49%).
+  - **Hot seat:** optimistic and Redis reject losers faster than conditional update, which makes them wait for the row lock.
+- **Most important finding:** with Redis paused, **both Redis strategies sold nothing, with p99 ≈ 30 s**. The Redis call sits *inside* the database transaction, so a hanging Redis held all 50 pooled connections, and every other request waited out Hikari's 30 s connection timeout. This changed the design of P2.4: the filter must run before a connection is taken and fail open to Postgres. The plan row now says so.
+- **Also fixed:** Redis command timeouts and other transient data-access errors (`TransientDataAccessException`, which includes lock timeouts) now map to `503 SERVICE_UNAVAILABLE`, `retryable: true`, instead of a 500.
+- **Why this approach:**
+  - **Same JVM, same database, strategies swapped in place:** each strategy sees identical data and warm caches. Five separate application runs would add noise from restarts.
+  - **Invariants checked inside the benchmark:** a benchmark that only measures speed can reward a broken strategy.
+  - **Honest caveats in the report:** the latencies are dominated by queueing for 50 connections, the numbers are from a laptop VM, and there is about 10% noise, so small differences are called ties. NFR-03 is judged later at *admitted* load (P9), not here.
+  - **Java harness instead of k6:** the plan allowed k6 or JMH. A Java harness drives the strategy directly, without HTTP noise, and can pause the Redis container mid-run. k6 is used for end-to-end load in P9.
+- **Alternatives considered:**
+  - **JMH:** better for microbenchmarks of CPU-bound code, but this is I/O-bound contention between thousands of concurrent transactions, which JMH's model doesn't fit well.
+  - **Running the benchmark in CI:** it takes about 4 minutes and the numbers would vary with CI hardware. It is opt-in instead, via `-Dbenchmark=true`. The correctness side already runs in CI as the contract suite.
+  - **Choosing Redis Lua as the production strategy:** it is the fastest under contention, but in its current placement it is a single point of failure. ADR 003 keeps its benefit while removing the failure mode (P2.4/P2.6).
+- **How it was verified:** the benchmark run completed with every invariant check passing (output in the report). `mvn verify` without the flag passes (129 tests, with the benchmark skipped).
+- **ADR:** [003](adr/003-seat-locking-strategy.md)
