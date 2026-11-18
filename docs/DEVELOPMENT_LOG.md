@@ -1090,3 +1090,30 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Gateway timeout:** payment `UNKNOWN`, seats stayed held; 41 s later reconciliation settled it and the booking became `CONFIRMED` without any user action;
   - `reset-demo.sql` checked inside a rolled-back transaction.
 - **ADR:** none
+
+---
+
+## Documentation upkeep
+
+### LLD-1 — Class diagrams brought in line with the code (after Phase 4)
+- **Date:** 2026-11-18
+- **Module / files:** `docs/lld/class-diagrams.md`
+- **What was changed:**
+  - **Booking (§2) and payment (§3):** redrawn from the classes as built. They had been drawn before those modules existed and no longer matched:
+    - the saga steps were wrong;
+    - booking was shown calling `InventoryApi` and `PaymentApi` directly instead of through its own `SeatReservations` and `Payments` ports;
+    - the gateway methods were out of date;
+    - `PaymentStatus.CANCELLED` was missing;
+    - a sandbox gateway was shown that was never built.
+
+    Each table now gives the pattern, the principle and the plan part, with ✅ or ⬜.
+  - **`common` (§4):** split into what is built (the idempotency filter, its store and outcomes, `ApiError`) and the planned Phase 5 outbox and consumer classes.
+  - **Inventory (§1.2):** added the fast-reject path (`FilteredCreateHold`, `SeatFilter` with the Redis and Null Object filters) and the `CachedCatalogReadStore` decorator; removed an `OutboxWriter` field that doesn't exist yet; marked `CatalogAdminApi` as planned (P6.9).
+  - **Header:** says the diagrams show the code as built, not a target.
+- **Why:** the file's own rule is that the code and the diagram match, or the diagram is updated in the same commit. Phases 3 and 4 missed that, and a reviewer comparing the diagram with the code would have found the gaps.
+- **Alternatives considered:**
+  - **Generating diagrams from code:** always current, but the output is cluttered with every class and loses the pattern annotations the review needs.
+- **How it was verified:**
+  - every class, method and arrow was checked against the source;
+  - all 7 Mermaid blocks parsed and rendered with Mermaid 11 in a browser.
+- **ADR:** none
