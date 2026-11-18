@@ -35,7 +35,8 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | Where | How it is applied | Status |
 |---|---|---|
 | `SeatLockingStrategy` | A new locking approach is a new class plus one `case` in `SeatLockingConfig` and a config value; `CreateHoldUseCase` does not change (five strategies exist) | ✅ P1.7 |
-| `PaymentGateway` | Adding Stripe next to Razorpay is a new adapter, not an edit to payment logic | ⬜ P4.1 |
+| `PaymentGateway` | Adding a real provider next to `MockPaymentGateway` is a new adapter, not an edit to payment logic | ✅ P4.1 |
+| `IdempotencyFilter` reused by payment | Checkout got exactly-once semantics by registering the shared filter with `payment.idempotency_keys`; the filter was not touched | ✅ P4.1 |
 | `IdempotencyFilter` | A new idempotent endpoint (or module) registers the filter for its paths with its own table; the filter and store are not edited | ✅ P3.5 |
 | `IdempotentEventConsumer` | A new consumer extends the base; dedup and retry code stays untouched | ⬜ P5.5 |
 | Kafka pub/sub | A new side effect (for example SMS) is a new consumer group; producers are unchanged | ⬜ P5 |
@@ -59,7 +60,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | Where | How it is applied | Status |
 |---|---|---|
 | `InventoryApi` (booking's view) vs `CatalogAdminApi` (admin) | Booking sees `hold / confirm / release / get` only; venue and show creation is a separate interface | ✅ `InventoryApi` P1.4; `CatalogAdminApi` ⬜ P6.9 |
-| `PaymentApi` vs `PaymentGateway` | Booking uses `PaymentApi` (create intent, refund); only the payment module sees the PSP-level `PaymentGateway` | ⬜ P4.1 |
+| `PaymentApi` vs `PaymentGateway` vs checkout | Booking uses `PaymentApi` (create intent, find, cancel, refund); the PSP-level `PaymentGateway` is internal to payment; checkout, the user's action, is only an HTTP endpoint and on neither interface | ✅ P4.1 |
 | Read vs write ports (`CatalogQuery` / `SeatMapQuery` vs `InventoryApi`) | Reads are served by `application.CatalogQueries` over the read-only port `CatalogReadStore`; the hold write path shares no interface with them, so the seat map can move to Redis (P2.3) or a replica (P7.5) alone | ✅ P1.5; Redis ✅ P2.3 (the decorator `CachedCatalogReadStore` replaces the read store; no write-path class changed) |
 
 **Without it:** one fat `InventoryService` interface. Every consumer recompiles for unrelated changes, and extraction has to expose everything.

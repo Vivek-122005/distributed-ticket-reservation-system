@@ -41,6 +41,12 @@ inventory:
   locking:
     # conditional-update (default) | pessimistic | optimistic | redis-lock | redis-lua  (P1.7, ADR 003)
     strategy: ${LOCKING_STRATEGY:conditional-update}
+payment:
+  mock:
+    # P4.1: the mock gateway. Checkout instruction RANDOM uses these rates; SUCCESS / DECLINE / TIMEOUT force an outcome.
+    latency: ${PAYMENT_MOCK_LATENCY:300ms}
+    decline-rate: ${PAYMENT_MOCK_DECLINE_RATE:0.1}
+    timeout-rate: ${PAYMENT_MOCK_TIMEOUT_RATE:0.05}
 management:
   health:
     redis:

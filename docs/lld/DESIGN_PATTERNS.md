@@ -20,10 +20,10 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `ConditionalUpdateStrategy.claim` |
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
-| 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3), booking (P3.2); ⬜ P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
+| 6 | [State](#6-state) | Behavioural (GoF) | ✅ inventory (P1.3), booking (P3.2), payment (P4.2) | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
 | 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ✅ P1.7 | `SeatLockingStrategy` ← 5 strategies, chosen by `SeatLockingConfig` |
-| 8 | [Adapter](#8-adapter) | Structural (GoF) | 🔨 inventory ✅ P3.3; ⬜ P4.1, P7.8 | `InventorySeatReservations` (booking → `InventoryApi`); later `PaymentGateway` adapters |
-| 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
+| 8 | [Adapter](#8-adapter) | Structural (GoF) | 🔨 ✅ P3.3, P4.1; ⬜ P7.8 (HTTP) | `InventorySeatReservations` (booking → `InventoryApi`), `MockPaymentGateway` (`PaymentGateway`) |
+| 9 | [Facade](#9-facade) | Structural (GoF) | ✅ P0.14, P4.1 | `InventoryApi` → `InventoryFacade`; `PaymentApi` → `PaymentFacade` |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
 | 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | 🔨 HTTP ✅ P3.4–P3.5; ⬜ P4.3, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
@@ -101,7 +101,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** try/catch in each controller. Duplicated, and error codes drift.
 
 ## 6. State
-- **Status:** ✅ inventory (P1.3), booking (P3.2); ⬜ P4.2 (`Payment`)
+- **Status:** ✅ inventory (P1.3), booking (P3.2), payment (P4.2)
+  - **payment (P4.2):** `payment.domain.PaymentStatus` (7 states incl. the honest `UNKNOWN`) and `payment.domain.Payment`; `canMoveTo` lets webhooks and reconciliation ignore stale transitions instead of failing. Tests: `payment/src/test/.../PaymentTest`.
 - **Where:**
   - **status enums:** `inventory.domain.{SeatStatus, HoldStatus, ShowStatus}`, each with `canTransitionTo(next)`.
   - **aggregates:** `domain.Hold.{confirm(now), release(), expire(now)}`, `domain.ShowSeat.{hold, book, release}` and `domain.Show.{openSale, closeSale}`. They throw `domain.IllegalStateTransitionException` (or `HoldExpiredException`) on an illegal move.
@@ -139,7 +140,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Branches inside the use case:** untestable in isolation, and violates OCP.
 
 ## 8. Adapter
-- **Status:** 🔨 ✅ P3.3 (booking → inventory, in-process); ⬜ P4.1 (payment), P7.8 (inventory over HTTP)
+- **Status:** 🔨 ✅ P3.3 (booking → inventory, in-process), P4.1 (payment gateway); ⬜ P7.8 (inventory over HTTP)
+- **Where (P4.1):** port `payment.application.port.PaymentGateway` (`createOrder(idempotencyKey, …)`, `charge`, `refund`, `fetchStatus`), adapter `payment.infrastructure.MockPaymentGateway`, which injects failures on demand (`DECLINE`, `TIMEOUT` with the money taken, `RANDOM` rates). A Razorpay test-mode adapter would implement the same port; it is deferred because the project has no sandbox credentials.
 - **Where (P3.3):** booking's port `booking.application.port.SeatReservations` (`hold`, `confirm`, `release`, plus `SeatReservationException` with booking's own reason codes), implemented by `booking.infrastructure.InventorySeatReservations`, which calls `inventory.api.InventoryApi` and translates its result types and exceptions. Inventory's exceptions never cross into booking's use cases or error mapping.
 - **Why a booking-owned port rather than calling `InventoryApi` directly:** the use cases speak booking's language, and the P7.8 HTTP adapter (timeouts, breaker, mapping of HTTP status codes) replaces one class instead of every call site.
 - **Plan:** port `PaymentGateway` (`createOrder`, `capture`, `refund`, `fetchStatus`), with adapters `MockPaymentGateway` (configurable failure injection) and `SandboxPaymentGateway` (Razorpay test mode). Port `InventoryApi`, with `InProcessInventoryAdapter` (stage 1) and `HttpInventoryAdapter` (stage 2).

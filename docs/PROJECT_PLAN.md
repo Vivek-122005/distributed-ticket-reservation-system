@@ -531,14 +531,14 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 4 — Payment orchestration (Saga) ⬜
+### Phase 4 — Payment orchestration (Saga) 🔨
 
 **Goal:** money and seats stay consistent across services without distributed transactions.
 
 | Part | Task | Details / why |
 |---|---|---|
-| P4.1 | `payment` module + `PaymentGateway` port *(rev)* | Adapter pattern: `MockPaymentGateway` (configurable latency, decline, timeout and duplicate-webhook rates, so failures can be shown on demand) and `SandboxPaymentGateway` (Razorpay test mode), selected by config. Intents, capture, refund. |
-| P4.2 | Payment states + idempotency | `INITIATED → PROCESSING → CAPTURED / FAILED / UNKNOWN → REFUNDED` *(rev)*. One payment per `bookingId` (unique constraint); provider calls carry an idempotency key. Prevents double charge. |
+| P4.1 ✅ | `payment` module + `PaymentGateway` port *(rev)* | Own `payment` schema and Flyway history. Port `PaymentGateway` (`createOrder` with idempotency key, `charge`, `refund`, `fetchStatus`); `MockPaymentGateway` with forced outcomes (`SUCCESS`, `DECLINE`, `TIMEOUT` = money taken but answer lost, `RANDOM` with configured rates) and latency. `PaymentApi` facade for booking (`createIntent`, `findByBooking(s)`, `cancel`, `refund`); checkout `POST /payments/{id}/checkout` is the user's action and stays out of it (ISP), behind the shared idempotency filter with payment's own table. Razorpay sandbox adapter deferred (no test credentials; same port). |
+| P4.2 ✅ | Payment states + idempotency | `INITIATED → PROCESSING → CAPTURED / FAILED / UNKNOWN`, `UNKNOWN → CAPTURED / FAILED`, `CAPTURED → REFUNDED`, plus `INITIATED → CANCELLED` *(rev, for cancel / expiry before paying)*. One payment per booking (`UNIQUE booking_id`, insert-if-absent) and gateway order keyed by booking id → no double charge. `PROCESSING` committed before the gateway call (no transaction open during it). All status changes go through `PaymentTransitions` (version check + retry); only the writer that changed the status publishes `PaymentCaptured` / `PaymentFailed`. |
 | P4.3 | Webhook handling | Signed webhooks, idempotent receiver, out-of-order safe (state machine ignores stale transitions). |
 | P4.4 | **Booking saga orchestrator** | Persisted saga state (step, attempts, next_retry_at). Steps: hold → create intent → await capture → confirm hold → confirm booking. Compensations: release hold, refund. |
 | P4.5 | Timeout handling | Payment not captured before hold expiry → cancel intent; capture arrives after expiry → late-payment path → automatic refund + `BookingExpired` event. |

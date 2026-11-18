@@ -8,8 +8,14 @@
   </parent>
   <artifactId>payment</artifactId>
   <name>payment</name>
-  <description>payment module (skeleton). Library jar packaged into ticketing-app (ADR 002).</description>
+  <description>Payment module: payment state machine, gateway adapters, webhooks and reconciliation. Library jar packaged into ticketing-app (ADR 002).</description>
   <dependencies>
     <dependency><groupId>com.vivek</groupId><artifactId>common</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-database-postgresql</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
   </dependencies>
 </project>

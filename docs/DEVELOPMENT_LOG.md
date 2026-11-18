@@ -959,3 +959,34 @@ A running record of **what was built, in which phase, in which part of the syste
 - **Bookings:** a booking wraps one inventory hold, through booking's own port, with a seven-state lifecycle enforced in the domain.
 - **Exactly once:** retries and concurrent duplicates of one request create one booking and get the same answer.
 - **User actions:** cancel while pending, and a paged history that never calls inventory.
+
+---
+
+## Phase 4 — Payment orchestration (Saga)
+
+### P4.1–P4.2 — Payment module, mock gateway and the payment state machine
+- **Date:** 2026-11-18
+- **Module / files:**
+  - **Schema:** `payment/src/main/resources/db/migration/payment/V1__payments.sql` (`payment.payments`, `payment.idempotency_keys`), migrated by `PaymentSchemaMigration` with its own history.
+  - **Domain:** `payment.domain.{Payment, PaymentStatus, IllegalPaymentTransitionException}`.
+  - **API:** `payment.api.{PaymentApi, PaymentView, PaymentState, PaymentCaptured, PaymentFailed, PaymentNotFoundException, PaymentNotRefundableException}`.
+  - **Application:** `PaymentFacade`, `CheckoutUseCase`, `PaymentTransitions`, ports `PaymentGateway`, `PaymentStore`, `PaymentEventPublisher`.
+  - **Adapters:** `MockPaymentGateway`, `JdbcPaymentStore`, `SpringPaymentEventPublisher`, `PaymentIdempotencyConfig`; web `PaymentController` (`GET /payments/{id}`, `POST /payments/{id}/checkout`), `PaymentExceptionHandler`.
+  - **Tests:** `PaymentTest` (unit), `PaymentIT`, `support.PaymentEventLog`. **Config:** `payment.mock.*`.
+- **What was built:**
+  - **Intents:** one payment per booking; asking again returns the same one. The gateway order is created with the booking id as idempotency key.
+  - **Checkout (mock provider page):** `PROCESSING` is committed, then the gateway is called with no transaction open, then the outcome is written: `CAPTURED`, `FAILED` (with reason) or `UNKNOWN` if no answer came. A second click on a payment past `INITIATED` returns it unchanged.
+  - **Mock gateway outcomes on demand:** `SUCCESS`, `DECLINE`, `TIMEOUT` (takes the money, loses the answer: the case reconciliation exists for), `RANDOM` (10% decline, 5% timeout by default), plus latency.
+  - **Cancel and refund** for the saga: an unpaid intent can be withdrawn (`CANCELLED`, a new state); a captured one refunded. Both idempotent.
+  - **Events:** `PaymentCaptured` / `PaymentFailed`, published only by the writer that actually changed the status, so three paths learning the same outcome announce it once.
+- **Why this approach:**
+  - **`UNKNOWN` as a real state:** treating a timeout as failed would release seats someone paid for; treating it as captured would hand out unpaid tickets (plan §4.4b).
+  - **No transaction around the gateway call:** a slow provider would otherwise pin a database connection per payment; the committed `PROCESSING` row is what reconciliation picks up after a crash.
+  - **Checkout outside `PaymentApi`:** booking never pays on the user's behalf (ISP), and the endpoint reuses the shared idempotency filter with payment's own table, proving P3.5's reuse claim.
+  - **Payment events instead of calling booking:** payment stays independent of booking (ArchUnit rule 2).
+- **Alternatives considered:**
+  - **Razorpay test mode now:** needs credentials and network in CI; deferred behind the same port.
+  - **A plain `FAILED` for timeouts:** simpler, but wrong for exactly the money-moved case.
+  - **Mock gateway state in the database:** survives restarts, but a real provider's state is outside our database too; the in-memory mock makes "provider forgot nothing / we forgot" explicit.
+- **How it was verified:** `PaymentTest` (6 cases) and `PaymentIT` (9 cases: one intent per booking; capture announced once and a second click charges nothing; decline; timeout → `UNKNOWN` while the gateway shows the money taken; cancelled intent can't be paid; captured can't be cancelled; refund only after capture, idempotent; other users get 404; checkout needs an idempotency key). `ModuleBoundaryTest` passes.
+- **ADR:** none (ADR 004 with the saga)
