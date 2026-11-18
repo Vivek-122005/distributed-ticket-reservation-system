@@ -20,7 +20,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 3 | [Compare-and-Set (conditional update)](#3-compare-and-set-conditional-update) | Concurrency | ✅ | `ConditionalUpdateStrategy.claim` |
 | 4 | [Data Transfer Object](#4-data-transfer-object) | API | ✅ | `CreateHoldRequest`, `HoldResponse`, `ApiError` |
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
-| 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3); ⬜ P3.2, P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
+| 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3), booking (P3.2); ⬜ P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
 | 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ✅ P1.7 | `SeatLockingStrategy` ← 5 strategies, chosen by `SeatLockingConfig` |
 | 8 | [Adapter](#8-adapter) | Structural (GoF) | ⬜ P4.1, P3.3 | `PaymentGateway`, `InventoryApi` adapters |
 | 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
@@ -100,12 +100,13 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** try/catch in each controller. Duplicated, and error codes drift.
 
 ## 6. State
-- **Status:** ✅ inventory (P1.3); ⬜ P3.2 (`Booking`), P4.2 (`Payment`)
+- **Status:** ✅ inventory (P1.3), booking (P3.2); ⬜ P4.2 (`Payment`)
 - **Where:**
   - **status enums:** `inventory.domain.{SeatStatus, HoldStatus, ShowStatus}`, each with `canTransitionTo(next)`.
   - **aggregates:** `domain.Hold.{confirm(now), release(), expire(now)}`, `domain.ShowSeat.{hold, book, release}` and `domain.Show.{openSale, closeSale}`. They throw `domain.IllegalStateTransitionException` (or `HoldExpiredException`) on an illegal move.
   - **unit tests:** `inventory/src/test/java/.../domain/` (`StatusTransitionsTest` lists every pair).
   - **database backstop:** the same rules as `CHECK` constraints in `V3__show_seat_state_checks.sql`.
+  - **booking (P3.2):** `booking.domain.BookingStatus` (7 states, plan §4.4) and `booking.domain.Booking.{markConfirmed, markFailed, markExpired, cancel, requireRefund, markRefunded}`. Repeating the transition that already happened returns `false` (safe for retried webhooks and saga steps); any other illegal move throws `booking.domain.IllegalStateTransitionException`. Tests: `booking/src/test/.../BookingTest`.
 - **Problem:** each aggregate has a lifecycle (see the state machines in plan §4.3–§4.4b). Illegal transitions, such as `CONFIRMED → HELD`, must be impossible.
 - **Why:**
   - **One place for the rules:** the transition table lives on the enum, and the aggregate methods add the business conditions: expiry, ownership by hold id, idempotent repeats.

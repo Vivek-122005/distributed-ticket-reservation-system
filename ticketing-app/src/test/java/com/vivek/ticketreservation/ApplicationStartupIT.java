@@ -25,6 +25,18 @@ class ApplicationStartupIT {
         assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6");
     }
 
+    /** P3.1: booking migrates its own schema with its own history, so module versions never clash. */
+    @Test
+    void bookingHasItsOwnMigrationHistory() {
+        List<String> applied = jdbc.queryForList(
+                "SELECT version FROM booking.flyway_schema_history WHERE success AND version IS NOT NULL ORDER BY installed_rank", String.class);
+        assertThat(applied).startsWith("1");
+        Integer tables = jdbc.queryForObject(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'booking' AND table_name IN ('bookings','booking_seats')",
+                Integer.class);
+        assertThat(tables).isEqualTo(2);
+    }
+
     @Test
     void v2CreatesTheShowBasedDemoCatalog() {
         Integer showSeats = jdbc.queryForObject(

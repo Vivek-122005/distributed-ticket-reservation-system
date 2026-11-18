@@ -512,14 +512,14 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 3 — Booking service & idempotency ⬜
+### Phase 3 — Booking service & idempotency 🔨
 
 **Goal:** a booking aggregate with a strict lifecycle and exactly-once request semantics.
 
 | Part | Task | Details / why |
 |---|---|---|
-| P3.1 | `booking` module skeleton | Own `booking` schema, hexagonal layout, Flyway, inside `ticketing-app`. |
-| P3.2 | Booking aggregate + state machine | `PENDING_PAYMENT → CONFIRMED / FAILED / EXPIRED / CANCELLED → REFUND_PENDING → REFUNDED`, with optimistic `version`; `BookingSeat` lines copy seat code and price at booking time. |
+| P3.1 ✅ | `booking` module skeleton | Own `booking` schema migrated by the module itself with its **own Flyway history** (`booking.flyway_schema_history`), so module versions never clash and the schema can move to its own database on extraction. No foreign keys into `inventory.*`; hold and show are referenced by value. |
+| P3.2 ✅ | Booking aggregate + state machine | `PENDING_PAYMENT → CONFIRMED / FAILED / EXPIRED / CANCELLED`, `EXPIRED / CANCELLED → REFUND_PENDING → REFUNDED`, on `BookingStatus`; framework-free `Booking` with idempotent transitions (a repeat returns `false`) and optimistic `version`; `BookingSeat` lines copy seat code and price at booking time; amount must equal the sum of seat prices. Unit-tested without a database. |
 | P3.3 | Inventory port | `InventoryApi` interface (hold / confirm / release) with an in-process adapter. The HTTP adapter (timeouts, retry for idempotent calls only, circuit breaker, bulkhead) arrives with extraction in P7.8. |
 | P3.4 | **Idempotency keys** | Table `idempotency_keys(key, user_id, request_hash, status, response, expires_at)`. Flow: `INSERT … ON CONFLICT DO NOTHING` → if new, process and store response; if existing & completed → return stored response; if existing & in-progress → `409 Retry-After`; if same key with different body → `422`. |
 | P3.5 | Idempotency as reusable filter | Packaged in `common` as a Spring interceptor so every mutating endpoint gets it. |

@@ -845,3 +845,32 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Reproduced first:** CI's order was reproduced locally with `-Dit.test=SeatCacheIT,SeatCacheReconcilerIT -Dfailsafe.runOrder=alphabetical` before and after the fix.
 - **Lesson:** tests that share a context share data, so assert on *relationships* (same or older version) rather than literal values a previous test may have moved. The production code was right; the test encoded an assumption.
 - **How it was verified:** `mvn verify` passes, 154 tests and 1 skipped. The forced CI order passes.
+
+---
+
+## Phase 3 — Booking service & idempotency
+
+### P3.1–P3.2 — Booking module schema and the Booking aggregate
+- **Date:** 2026-11-18
+- **Module / files:**
+  - **Schema:** `booking/src/main/resources/db/migration/booking/V1__bookings.sql` (`booking.bookings`, `booking.booking_seats`).
+  - **Migration runner:** `booking.infrastructure.BookingSchemaMigration`.
+  - **Domain:** `booking.domain.{Booking, BookingSeat, BookingStatus, IllegalStateTransitionException}`.
+  - **Tests:** `booking/src/test/.../BookingTest` (unit), `ApplicationStartupIT.bookingHasItsOwnMigrationHistory`.
+  - **Build:** `booking/pom.xml` (JDBC, Flyway, test).
+- **What was built:**
+  - **Own schema, own history:** the booking module migrates `booking.*` itself, at startup, with the history table `booking.flyway_schema_history`. Inventory's Spring Boot Flyway run is unchanged.
+  - **No cross-module foreign keys:** `hold_id` and `show_id` are stored by value. A booking references exactly one hold (`UNIQUE (hold_id)`).
+  - **The state machine (plan §4.4)** lives on `BookingStatus`; `Booking` exposes one method per business event. Repeating a transition that already happened is a no-op that returns `false`, so a retried webhook or saga step is harmless. Anything else illegal throws.
+  - **Price copied at booking time:** each `BookingSeat` keeps the seat code and the price paid, and the aggregate rejects an amount that is not the sum of its seats.
+  - **`version` column** for optimistic locking; the store that uses it arrives in P3.3.
+- **Why this approach:**
+  - **Per-module history** lets each module number its migrations from V1 and keeps the door open for database-per-service (P7.8) without rewriting history.
+  - **Enum-table State pattern**, as in inventory: one place for the rules; seven states don't justify a class per state.
+  - **Idempotent transitions** make every caller (user, webhook, expiry, saga) safe to retry without extra bookkeeping.
+- **Alternatives considered:**
+  - **One Flyway run over every folder** (`db/migration/inventory`, `db/migration/booking`): versions must then be unique across modules, and the modules share one history. Rejected.
+  - **A second `Flyway` bean:** Spring Boot's Flyway auto-configuration backs off when one exists, which would silently stop inventory migrating. Hence a plain component that calls Flyway's API.
+  - **Foreign keys to `inventory.holds`:** stronger in a single database, but they break the module boundary and extraction. Consistency comes from the saga and reconciliation instead.
+- **How it was verified:** `BookingTest` (9 cases: happy path, idempotent repeats, refund paths, terminal states, amount and seat-count rules); `ApplicationStartupIT` checks the booking history table and both tables exist; `ModuleBoundaryTest` still passes.
+- **ADR:** none (follows ADR 002)

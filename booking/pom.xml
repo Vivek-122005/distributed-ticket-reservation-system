@@ -8,8 +8,13 @@
   </parent>
   <artifactId>booking</artifactId>
   <name>booking</name>
-  <description>booking module (skeleton). Library jar packaged into ticketing-app (ADR 002).</description>
+  <description>Booking module: booking lifecycle, idempotency and the booking saga. Library jar packaged into ticketing-app (ADR 002).</description>
   <dependencies>
     <dependency><groupId>com.vivek</groupId><artifactId>common</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- The module migrates its own schema with its own history table (P3.1), independent of inventory. -->
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-database-postgresql</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
   </dependencies>
 </project>

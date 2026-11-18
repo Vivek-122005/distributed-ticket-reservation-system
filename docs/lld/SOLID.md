@@ -21,7 +21,8 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `JdbcHoldStore`, `JdbcShowStore` | Only row ↔ aggregate mapping for one table each | ✅ P1.3 |
 | `Hold`, `ShowSeat`, `Show` | Only their own state rules; no persistence or HTTP | ✅ P1.3 |
 | Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`; `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService`; the shared result mapping lives once in `HoldViews`. Expiry: *what* to do is in `ExpireHoldsJob`, *when* (scheduling, batching, poison isolation) in `infrastructure.ScheduledHoldExpiry` | ✅ P1.4, P2.1 |
-| `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | ⬜ P3.2, P4.4 |
+| `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | 🔨 `Booking` ✅ P3.2; saga ⬜ P4.4 |
+| `BookingSchemaMigration` | Only migrates the booking schema; the module owns its history table, inventory's Flyway is untouched | ✅ P3.1 |
 | `SeatCacheReconciler` vs `ScheduledSeatCacheReconciliation` | The first decides what is drift and repairs it; the second only decides when to run | ✅ P2.5 |
 | `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
 

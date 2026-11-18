@@ -14,8 +14,8 @@ spring:
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:250ms}
   flyway:
     enabled: true
-    # One folder per module. Tables live in per-module schemas (inventory.*, from V2); the shared
-    # history table stays in public until booking gets its own migrations (P3.1).
+    # Inventory's migrations (history in public.flyway_schema_history, kept for existing databases).
+    # Booking (P3.1) and payment migrate their own schemas with their own history tables.
     locations: classpath:db/migration/inventory
 inventory:
   expiry:
