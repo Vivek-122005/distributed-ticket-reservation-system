@@ -990,3 +990,21 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Mock gateway state in the database:** survives restarts, but a real provider's state is outside our database too; the in-memory mock makes "provider forgot nothing / we forgot" explicit.
 - **How it was verified:** `PaymentTest` (6 cases) and `PaymentIT` (9 cases: one intent per booking; capture announced once and a second click charges nothing; decline; timeout → `UNKNOWN` while the gateway shows the money taken; cancelled intent can't be paid; captured can't be cancelled; refund only after capture, idempotent; other users get 404; checkout needs an idempotency key). `ModuleBoundaryTest` passes.
 - **ADR:** none (ADR 004 with the saga)
+
+### P4.3 — Signed, idempotent webhooks
+- **Date:** 2026-11-18
+- **Module / files:** `V2__webhook_events.sql`; `payment.application.{HandleWebhookUseCase, WebhookSignature}`, port `WebhookInbox`; `payment.infrastructure.{JdbcWebhookInbox, MockWebhookSender, WebhookConfig}`; `payment.web.WebhookController`; config `payment.webhook.secret`, `payment.mock.{webhook-delay, duplicate-webhook-rate}`; tests `WebhookIT`.
+- **What was built:**
+  - **Receiver** `POST /api/v1/payments/webhooks/mock`: verifies `X-Mock-Signature` (HMAC-SHA256 of the raw body), parses the event, drops a repeated event id, applies `payment.captured` / `payment.failed` through `PaymentTransitions`, records the event as `APPLIED` or `IGNORED`.
+  - **Answers:** 200 for applied, duplicate and ignored (the provider must stop retrying), 401 for a bad signature, 400 for a malformed event.
+  - **The mock provider's side:** after every charge or decline, `MockWebhookSender` POSTs a signed event to the app over real HTTP after 500 ms; with probability 0.2 it sends the same event twice. A `TIMEOUT` charge sends nothing, so that payment can only be resolved by reconciliation (P4.8).
+- **Why this approach:**
+  - **Signature over the raw bytes, constant-time compare:** the controller takes `byte[]`, because re-serialised JSON would not match; `MessageDigest.isEqual` prevents timing attacks.
+  - **Stale events ignored, not rejected:** providers don't guarantee order. A "failed" after "captured" is history, not an instruction, and answering 4xx would only make the provider retry it forever.
+  - **Apply, then record:** recording first and crashing would drop the event for good; applying first and crashing only causes a harmless re-apply.
+  - **Real HTTP for mock webhooks:** the signature check, the raw-body binding and the filter chain are exercised exactly as with a real provider.
+- **Alternatives considered:**
+  - **Trusting the checkout response only:** a closed browser or a lost response would leave payments `PROCESSING` forever; webhooks are the provider's authoritative push.
+  - **Rejecting unknown order ids with 404:** the provider would retry; they are recorded as `IGNORED` instead.
+- **How it was verified:** `WebhookIT`, 6 cases: capture applied once and a repeated event id is `DUPLICATE`; a second capture event with a new id is harmless and announced once; a failure after capture is `IGNORED`; a webhook resolves an `UNKNOWN` payment; a forged signature gets 401 and changes nothing; after a real checkout the mock provider's webhook arrives over HTTP, is accepted, and `PaymentCaptured` is still published once. `PaymentIT` still passes.
+- **ADR:** none

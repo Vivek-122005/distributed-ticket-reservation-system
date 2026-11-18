@@ -47,6 +47,11 @@ payment:
     latency: ${PAYMENT_MOCK_LATENCY:300ms}
     decline-rate: ${PAYMENT_MOCK_DECLINE_RATE:0.1}
     timeout-rate: ${PAYMENT_MOCK_TIMEOUT_RATE:0.05}
+    # P4.3: the mock provider's signed webhooks, delivered over HTTP after a delay, sometimes twice.
+    webhook-delay: ${PAYMENT_MOCK_WEBHOOK_DELAY:500ms}
+    duplicate-webhook-rate: ${PAYMENT_MOCK_DUPLICATE_WEBHOOK_RATE:0.2}
+  webhook:
+    secret: ${PAYMENT_WEBHOOK_SECRET:local-dev-webhook-secret}
 management:
   health:
     redis:

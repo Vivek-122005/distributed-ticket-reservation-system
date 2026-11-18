@@ -26,7 +26,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 9 | [Facade](#9-facade) | Structural (GoF) | ✅ P0.14, P4.1 | `InventoryApi` → `InventoryFacade`; `PaymentApi` → `PaymentFacade` |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
-| 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | 🔨 HTTP ✅ P3.4–P3.5; ⬜ P4.3, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
+| 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | 🔨 HTTP ✅ P3.4–P3.5, webhooks ✅ P4.3; ⬜ P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
 | 13 | [Template Method](#13-template-method) | Behavioural (GoF) | ⬜ P5.5 | `IdempotentEventConsumer` |
 | 14 | [Observer / Publish-Subscribe](#14-observer--publish-subscribe) | Behavioural (GoF) | 🔨 in-process ✅ P2.1; Kafka ⬜ P5 | `InventoryEventPublisher` → `@TransactionalEventListener`s; later outbox → Kafka |
 | 15 | [Factory](#15-factory) | Creational (GoF) | ⬜ P5.1 | `EventEnvelopeFactory` |
@@ -180,7 +180,8 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Unique constraint on a business key** (for example one pending booking per user and show): prevents duplicates but can't return the original response, and blocks legitimate second bookings.
   - **Redis `SET NX` for the claim:** fast, but the stored response would be lost on eviction or failover, which is exactly when a replay is needed.
   - **Holding a row lock (`SELECT … FOR UPDATE`) for the whole request:** concurrent retries would queue on the lock and each hold a pooled connection; the lease-based claim answers them immediately.
-- **Plan (rest):** signed webhooks deduplicated by event id (P4.3); a `processed_events` insert in the same transaction as the consumer's side effect (P5.5).
+- **Webhooks (P4.3):** `payment.application.HandleWebhookUseCase` with `WebhookSignature` (HMAC-SHA256, constant-time compare) and the port `WebhookInbox` (`payment.webhook_events`, keyed by the provider's event id). Three layers: duplicate ids are dropped; transitions are idempotent; stale ones (`canMoveTo` false) are recorded as `IGNORED`. The outcome is applied before the id is recorded: a crash in between makes the provider's retry re-apply it (harmless) instead of losing it. Tests: `WebhookIT`.
+- **Plan (rest):** a `processed_events` insert in the same transaction as the consumer's side effect (P5.5).
 - **Why:** every channel is at-least-once, so duplicates must be harmless (HLD §5.2).
 - **Alternative:** a Redis-only key store. Fast, but keys are lost on eviction or failover.
 
