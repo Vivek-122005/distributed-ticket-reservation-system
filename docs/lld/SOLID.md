@@ -72,7 +72,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `FilteredCreateHold` → `SeatFilter` | The fast path is a port with two implementations (Redis, pass-through Null Object); `CreateHoldUseCase` didn't change at all (OCP) | ✅ P2.4 |
 | Facade → `HoldMetrics` | Business metrics go through an application port; Micrometer lives only in `infrastructure.MicrometerHoldMetrics` | ✅ P1.9 |
 | `InventoryController` → `InventoryApi` | The HTTP adapter depends on the module interface, not on the use-case class | ✅ P0.14 |
-| Booking → `InventoryApi` | Booking depends on the interface; Spring wires the in-process or HTTP adapter | ⬜ P3.3 |
+| Booking → `SeatReservations` | `CreateBookingUseCase` depends on booking's own port; `InventorySeatReservations` adapts `InventoryApi` in-process, and the HTTP adapter (P7.8) will replace it without touching the use case. Unit-tested with fakes (`CreateBookingUseCaseTest`) | ✅ P3.3 |
 | Domain → nothing | Domain classes import no Spring, Jackson, JPA or JDBC, enforced by ArchUnit (`ModuleBoundaryTest.domainIsFrameworkFree`) | ✅ P1.3 |
 
 **Without it:** business code imports JPA and HTTP clients directly, so it can't be unit-tested, can't swap strategies and can't be extracted.

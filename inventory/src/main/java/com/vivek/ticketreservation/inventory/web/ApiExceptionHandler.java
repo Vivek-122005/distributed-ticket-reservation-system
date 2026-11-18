@@ -1,5 +1,6 @@
 package com.vivek.ticketreservation.inventory.web;
 
+import com.vivek.ticketreservation.common.web.ApiError;
 import com.vivek.ticketreservation.inventory.api.EventNotFoundException;
 import com.vivek.ticketreservation.inventory.api.HoldConflictException;
 import com.vivek.ticketreservation.inventory.api.HoldNotFoundException;
@@ -14,8 +15,12 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.*;
 
-/** Pattern: centralised exception translation, see docs/lld/DESIGN_PATTERNS.md#5. */
-@RestControllerAdvice
+/**
+ * Pattern: centralised exception translation, see docs/lld/DESIGN_PATTERNS.md#5. Scoped to the
+ * inventory controllers (P3.3): each module maps its own exceptions, so no module's handler decides
+ * another module's error codes.
+ */
+@RestControllerAdvice(basePackageClasses = InventoryController.class)
 public class ApiExceptionHandler {
     @ExceptionHandler(SeatUnavailableException.class)
     @ResponseStatus(HttpStatus.CONFLICT)

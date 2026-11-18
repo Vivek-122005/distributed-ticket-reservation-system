@@ -874,3 +874,25 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Foreign keys to `inventory.holds`:** stronger in a single database, but they break the module boundary and extraction. Consistency comes from the saga and reconciliation instead.
 - **How it was verified:** `BookingTest` (9 cases: happy path, idempotent repeats, refund paths, terminal states, amount and seat-count rules); `ApplicationStartupIT` checks the booking history table and both tables exist; `ModuleBoundaryTest` still passes.
 - **ADR:** none (follows ADR 002)
+
+### P3.3 — Create and read a booking through the inventory port
+- **Date:** 2026-11-18
+- **Module / files:**
+  - **Ports:** `booking.application.port.{SeatReservations, SeatReservationException, BookingStore}`.
+  - **Use cases:** `booking.application.{CreateBookingUseCase, BookingQueries, BookingView, BookingNotFoundException}`.
+  - **Adapters:** `booking.infrastructure.{InventorySeatReservations, JdbcBookingStore}`; `booking.web.{BookingController, BookingResponse, CreateBookingRequest, BookingExceptionHandler}`.
+  - **Shared:** `ApiError` moved from `inventory.web` to `common.web`; `inventory.web.ApiExceptionHandler` scoped to inventory's controllers.
+  - **Tests:** `CreateBookingUseCaseTest` (unit, fakes), `CreateBookingIT`, `support.BookingTestData`.
+- **What was built:**
+  - **`POST /api/v1/bookings`:** holds the seats through the port, then inserts a `PENDING_PAYMENT` booking with copies of the seat codes and prices; `201` with `Location`. Errors keep the API contract: `SEAT_UNAVAILABLE`/`SHOW_NOT_ON_SALE` 409, `SHOW_NOT_FOUND` 404, `INVALID_REQUEST` 400.
+  - **`GET /api/v1/bookings/{id}`:** reads only the booking schema; another user's booking is reported as `BOOKING_NOT_FOUND`.
+  - **Compensation:** hold and booking are two modules and two transactions. If the booking insert fails after the hold committed, the use case releases the hold immediately; if that also fails, the hold's own expiry frees the seats within 5 minutes.
+- **Why this approach:**
+  - **Booking's own port (`SeatReservations`):** use cases and error mapping only see booking's vocabulary. Swapping to the HTTP adapter at extraction (P7.8) replaces one class.
+  - **Two transactions, not one:** a single transaction spanning both modules would stop working the day inventory becomes a separate service. Designing for the split now keeps the saga (P4.4) honest.
+  - **Scoped exception handlers:** with one global handler, inventory's handler was silently deciding error codes for every module. Each module now maps its own exceptions to the shared `ApiError`.
+- **Alternatives considered:**
+  - **Calling `InventoryApi` directly from the use case:** fewer classes, but inventory's exceptions and types leak into booking and every call site changes at extraction.
+  - **Booking row first, then hold:** a row would exist for seats that may never be held, and a failed hold leaves a booking to clean up. Holding first means a booking always has seats.
+- **How it was verified:** `CreateBookingUseCaseTest` (a failed insert releases the hold); `CreateBookingIT` (5 cases: pending booking with prices and Location, taken seat creates nothing and holds nothing, unknown show, another user's booking, 9 seats rejected); `CreateHoldIT`, `CatalogReadIT`, `ApplicationStartupIT` still pass after the `ApiError` move.
+- **ADR:** none

@@ -22,7 +22,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 5 | [Centralised exception translation](#5-centralised-exception-translation) | API | ✅ | `ApiExceptionHandler` |
 | 6 | [State](#6-state) | Behavioural (GoF) | 🔨 ✅ inventory (P1.3), booking (P3.2); ⬜ P4.2 | `SeatStatus`/`HoldStatus`/`ShowStatus` + `ShowSeat`, `Hold`, `Show`; later `Booking`, `Payment` |
 | 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ✅ P1.7 | `SeatLockingStrategy` ← 5 strategies, chosen by `SeatLockingConfig` |
-| 8 | [Adapter](#8-adapter) | Structural (GoF) | ⬜ P4.1, P3.3 | `PaymentGateway`, `InventoryApi` adapters |
+| 8 | [Adapter](#8-adapter) | Structural (GoF) | 🔨 inventory ✅ P3.3; ⬜ P4.1, P7.8 | `InventorySeatReservations` (booking → `InventoryApi`); later `PaymentGateway` adapters |
 | 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
@@ -57,7 +57,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 
 ## 2. Repository
 - **Status:** ✅ behind ports since P1.3
-- **Where:** ports `inventory.application.port.HoldStore` (`createHeld`, `find`) and `ShowStore` (`find`). Adapters `inventory.infrastructure.JdbcHoldStore` and `JdbcShowStore` (plain JDBC, `NamedParameterJdbcTemplate`) map rows to the framework-free aggregates `domain.Hold` and `domain.Show`.
+- **Where:** booking (P3.3): port `booking.application.port.BookingStore` (`insert`, `find`, version-checked `updateStatus`), adapter `booking.infrastructure.JdbcBookingStore`. Inventory: ports `inventory.application.port.HoldStore` (`createHeld`, `find`) and `ShowStore` (`find`). Adapters `inventory.infrastructure.JdbcHoldStore` and `JdbcShowStore` (plain JDBC, `NamedParameterJdbcTemplate`) map rows to the framework-free aggregates `domain.Hold` and `domain.Show`.
 - **Problem:** use cases need to load and save aggregates without knowing SQL, and the domain must not carry persistence annotations (SOLID.md deviation #3).
 - **Why:**
   - **Collection-like interface:** one per aggregate, owned by the application layer.
@@ -93,6 +93,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** returning entities directly. Less code, but it couples the API to the schema and risks lazy-loading errors.
 
 ## 5. Centralised exception translation
+- **Per module (P3.3):** `inventory.web.ApiExceptionHandler` and `booking.web.BookingExceptionHandler` are each scoped to their own controllers (`basePackageClasses`), and both build `common.web.ApiError`, so the error shape is shared but each module owns its codes.
 - **Status:** ✅
 - **Where:** `inventory/src/main/java/com/vivek/ticketreservation/inventory/web/ApiExceptionHandler.java` (`@RestControllerAdvice`).
 - **Problem:** every endpoint must map domain failures to the same error shape (`code`, `message`, `retryable`, `timestamp` from P1.3).
@@ -138,7 +139,9 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Branches inside the use case:** untestable in isolation, and violates OCP.
 
 ## 8. Adapter
-- **Status:** ⬜ P4.1 (payment), P3.3 / P7.8 (inventory)
+- **Status:** 🔨 ✅ P3.3 (booking → inventory, in-process); ⬜ P4.1 (payment), P7.8 (inventory over HTTP)
+- **Where (P3.3):** booking's port `booking.application.port.SeatReservations` (`hold`, `confirm`, `release`, plus `SeatReservationException` with booking's own reason codes), implemented by `booking.infrastructure.InventorySeatReservations`, which calls `inventory.api.InventoryApi` and translates its result types and exceptions. Inventory's exceptions never cross into booking's use cases or error mapping.
+- **Why a booking-owned port rather than calling `InventoryApi` directly:** the use cases speak booking's language, and the P7.8 HTTP adapter (timeouts, breaker, mapping of HTTP status codes) replaces one class instead of every call site.
 - **Plan:** port `PaymentGateway` (`createOrder`, `capture`, `refund`, `fetchStatus`), with adapters `MockPaymentGateway` (configurable failure injection) and `SandboxPaymentGateway` (Razorpay test mode). Port `InventoryApi`, with `InProcessInventoryAdapter` (stage 1) and `HttpInventoryAdapter` (stage 2).
 - **Why:** core code is identical whether it talks to a fake PSP, a real sandbox or a remote service. Reconciliation (P4.8) needs `fetchStatus` from every gateway.
 - **Alternative:** calling the Razorpay SDK directly from use cases. Failure injection becomes impossible and the vendor locks in.
