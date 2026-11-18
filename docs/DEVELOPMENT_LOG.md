@@ -922,3 +922,19 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Storing 4xx answers as "not processed":** a retried rejection could then succeed later with a different outcome, which breaks "same request, same answer" (Stripe's semantics, which we follow).
 - **How it was verified:** `IdempotencyIT`, 8 cases: replay returns the same body and `Location` and creates one booking; a stored 409 is replayed after the seat is freed; different body → 422; keys are per user; missing key → 400; in-progress → 409 with `Retry-After`; a lapsed lease is taken over by the same request but not by a different one; an expired key is reusable. `CreateBookingIT` still passes.
 - **ADR:** none
+
+### P3.6 — Exactly-once booking under concurrency
+- **Date:** 2026-11-18
+- **Module / files:** `ticketing-app/src/test/.../booking/BookingConcurrencyIT`, `support/BookingRequestBuilder`.
+- **What was built:**
+  - **50 concurrent duplicates** of one request (same user, same key, one start gate): exactly one booking. Every `201` carries the same booking id; every other answer is `409 IDEMPOTENCY_IN_PROGRESS`. Two seats held, both by that booking's hold.
+  - **Timed-out client:** a raw `HttpClient` gives up after 1 ms; the retry (repeated while it gets `IDEMPOTENCY_IN_PROGRESS`, as `Retry-After` says) gets `201` with the booking the first attempt created. One booking in the database.
+  - **200 different users for the same two seats:** one booking, every other answer `SEAT_UNAVAILABLE` (inventory's guarantee, now through the booking path).
+  - **20 users × 5 duplicates each:** 20 bookings, at most one per user.
+  - **`BookingRequestBuilder`:** immutable test-data builder (Builder pattern), so racing threads share one base request safely.
+- **Why this approach:** the guarantees that matter are under concurrency, so they are tested with the same start-gate harness as the inventory suite (`Contention.race`) and checked in the database, not only in the responses.
+- **Alternatives considered:**
+  - **Mocked store in a unit test:** proves the filter's branching but not the single-statement claim under real Postgres concurrency, which is the point.
+  - **Simulating the timeout with a sleep in production code:** rejected; a 1 ms client timeout exercises the real path without test hooks in `main`.
+- **How it was verified:** `BookingConcurrencyIT`, 4 tests pass in 4.8 s.
+- **ADR:** none
