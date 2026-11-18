@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ticket Reservation System · Live demo</title>
+  <link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◆</span>
+    <div>
+      <h1>Distributed Ticket Reservation System</h1>
+      <p class="sub">Live demo of the inventory, booking and payment modules · <span id="health" class="pill">checking…</span></p>
+    </div>
+  </div>
+  <label class="user-switch">Signed in as
+    <select id="user"></select>
+  </label>
+</header>
+
+<main class="layout">
+  <!-- ------------------------------------------------------------ seat map -->
+  <section class="card map-card">
+    <div class="card-head">
+      <div>
+        <h2 id="event-name">Loading event…</h2>
+        <p class="muted" id="show-info"></p>
+      </div>
+      <div class="counts" id="counts"></div>
+    </div>
+    <div class="stage">STAGE</div>
+    <div id="seat-grid" class="seat-grid" aria-label="Seat map"></div>
+    <div class="legend">
+      <span><i class="seat-dot available"></i>Available</span>
+      <span><i class="seat-dot selected"></i>Selected</span>
+      <span><i class="seat-dot mine"></i>Held by you</span>
+      <span><i class="seat-dot held"></i>Held by someone</span>
+      <span><i class="seat-dot booked"></i>Booked</span>
+    </div>
+    <div class="selection">
+      <div><strong id="sel-seats">No seats selected</strong><span class="muted" id="sel-total"></span></div>
+      <button id="book-btn" class="primary" disabled>Hold seats &amp; book</button>
+    </div>
+    <p class="hint">Pick up to 8 seats. Seats are held for 5 minutes while you pay. The map refreshes every 1.5 s, so seats taken in other tabs or by other users show up live.</p>
+  </section>
+
+  <!-- ------------------------------------------------------------ booking -->
+  <section class="card booking-card">
+    <h2>Your booking</h2>
+    <div id="booking-empty" class="empty">Select seats and press <b>Hold seats &amp; book</b>.</div>
+    <div id="booking" hidden>
+      <div class="booking-head">
+        <span id="b-status" class="badge"></span>
+        <span id="b-timer" class="timer"></span>
+      </div>
+      <dl class="kv">
+        <dt>Booking</dt><dd id="b-id" class="mono"></dd>
+        <dt>Seats</dt><dd id="b-seats"></dd>
+        <dt>Amount</dt><dd id="b-amount"></dd>
+        <dt>Payment</dt><dd><span id="b-pay" class="badge small"></span> <span class="mono muted" id="b-order"></span></dd>
+      </dl>
+      <div id="pay-actions" class="pay-actions">
+        <p class="muted">Mock payment page: choose what the payment gateway does.</p>
+        <button data-pay="SUCCESS" class="success">Pay ✓</button>
+        <button data-pay="DECLINE" class="danger">Card declined</button>
+        <button data-pay="TIMEOUT" class="warn" title="The gateway takes the money but its answer is lost">Gateway timeout</button>
+        <button id="cancel-btn" class="ghost">Cancel booking</button>
+      </div>
+      <div class="explain" id="b-explain"></div>
+      <h3>Saga timeline</h3>
+      <ol id="timeline" class="timeline"></ol>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ lab -->
+  <section class="card lab-card">
+    <h2>Concurrency lab</h2>
+    <div class="lab">
+      <div class="lab-item">
+        <h3>Stampede for one seat</h3>
+        <p class="muted">N different users try to book the same seat at the same moment. Exactly one must win.</p>
+        <div class="row">
+          <label>Users <input id="st-n" type="number" value="200" min="2" max="1000"></label>
+          <label>Seat <input id="st-seat" type="text" value="A100" size="5"></label>
+          <button id="st-run" class="primary">Run stampede</button>
+        </div>
+        <div id="st-result" class="result"></div>
+      </div>
+      <div class="lab-item">
+        <h3>Duplicate retries (idempotency)</h3>
+        <p class="muted">You send the same booking request 20 times with one <code>Idempotency-Key</code>, as a client retrying after timeouts would. One booking must come out.</p>
+        <div class="row">
+          <label>Seat <input id="dup-seat" type="text" value="A99" size="5"></label>
+          <button id="dup-run" class="primary">Send 20 duplicates</button>
+        </div>
+        <div id="dup-result" class="result"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ history -->
+  <section class="card history-card">
+    <div class="card-head"><h2>My bookings</h2><button id="hist-refresh" class="ghost small">Refresh</button></div>
+    <table class="history">
+      <thead><tr><th>Created</th><th>Seats</th><th>Amount</th><th>Booking</th><th>Payment</th><th></th></tr></thead>
+      <tbody id="history"></tbody>
+    </table>
+  </section>
+
+  <!-- ------------------------------------------------------------ log -->
+  <section class="card log-card">
+    <div class="card-head"><h2>HTTP activity</h2><button id="log-clear" class="ghost small">Clear</button></div>
+    <ol id="log" class="log"></ol>
+  </section>
+</main>
+
+<script src="/demo.js"></script>
+</body>
+</html>

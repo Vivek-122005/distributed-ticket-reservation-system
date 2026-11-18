@@ -667,7 +667,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 12 — Documentation, demo & polish ⬜
+### Phase 12 — Documentation, demo & polish 🔨
 
 | Part | Task |
 |---|---|
@@ -676,7 +676,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P12.3 | Polished README with architecture diagram, quickstart, results summary |
 | P12.4 | Demo script (§10) rehearsed and recorded |
 | P12.5 | Viva/interview Q&A sheet: "why not X?" for every major decision |
-| P12.6 | Optional thin seat-map UI (only if time remains) |
+| P12.6 ✅ | Thin demo UI *(pulled forward for the 2026-11-18 review)*: one static page served by `ticketing-app` (seat map, book → pay with every gateway outcome, cancel, history, saga timeline, concurrency lab: stampede and duplicate retries, HTTP log); `docs/demo/reset-demo.sql` |
 
 ---
 

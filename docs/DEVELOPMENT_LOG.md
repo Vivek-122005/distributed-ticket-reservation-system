@@ -1064,3 +1064,29 @@ A running record of **what was built, in which phase, in which part of the syste
 - **Webhooks:** signed, deduplicated, and stale ones ignored.
 - **The saga:** hold → pay → confirm, with compensations for decline, expiry, cancel and late payment; it survives crashes at any step and runs on any number of replicas.
 - **Reconciliation:** any payment we're unsure about is settled against the provider.
+
+---
+
+## Phase 12 (pulled forward) — Demo UI
+
+### P12.6 — Thin demo UI for the review
+- **Date:** 2026-11-18
+- **Module / files:** `ticketing-app/src/main/resources/static/{index.html, demo.css, demo.js}`, `docs/demo/reset-demo.sql`, README ("Live demo UI").
+- **What was built:** one page at `http://localhost:8080`, served by the app itself, that drives the real API:
+  - **Seat map** of the demo show from `GET /shows/{id}/seats` every 1.5 s, coloured available / selected / held by you / held by someone / booked; seats that change flash.
+  - **Book → pay:** `POST /bookings` with a fresh `Idempotency-Key`, a hold countdown, and a mock payment page with the gateway's outcome chosen per click (`SUCCESS`, `DECLINE`, `TIMEOUT`), plus cancel. A saga timeline lists every booking and payment state change as the client observes it, with a one-line explanation of each end state.
+  - **Users:** switch between Alice, Bob and Charlie (fixed ids in `X-User-Id`) to show contention and per-user history.
+  - **Concurrency lab:** *Stampede* (N concurrent bookings for one seat from N random users) and *Duplicate retries* (20 concurrent copies of one request with one key).
+  - **My bookings** (`GET /bookings`) and an HTTP activity log of every call with status and latency.
+  - **`reset-demo.sql`:** returns the local database to 100 free seats and no bookings between runs.
+- **Why this approach:** plain HTML/CSS/JS from Spring Boot's `static/` folder: no Node toolchain, no CORS, one `java -jar` runs everything. The UI holds no logic of its own; every rule it shows is enforced by the API, so the demo cannot "cheat".
+- **Alternatives considered:**
+  - **React/Vite app:** nicer component model, but a second build and dev server for one page.
+  - **Postman collection only:** shows the API, but not contention, live seat changes or the saga timeline.
+- **How it was verified (in the browser, against the Compose Postgres and Redis):**
+  - selecting A1, A2 and booking → `PENDING_PAYMENT`, seats purple, 4:59 timer; **Pay ✓** → `CONFIRMED` / `CAPTURED`, seats grey (`BOOKED`);
+  - **Stampede**, 200 users for A100: 1 winner, 199 `SEAT_UNAVAILABLE`, 283 ms;
+  - **Duplicate retries:** 20 requests → 1 booking (1 first answer, 19 told `IDEMPOTENCY_IN_PROGRESS`);
+  - **Gateway timeout:** payment `UNKNOWN`, seats stayed held; 41 s later reconciliation settled it and the booking became `CONFIRMED` without any user action;
+  - `reset-demo.sql` checked inside a rolled-back transaction.
+- **ADR:** none

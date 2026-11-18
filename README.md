@@ -45,13 +45,24 @@ curl -X POST http://localhost:8080/api/v1/shows/00000000-0000-0000-0000-00000000
   -d '{"seatCodes":["A1","A2"]}'
 ```
 
+### Live demo UI
+
+Open **`http://localhost:8080`** once the app is running. One page, served by the app itself (plain HTML/JS in `ticketing-app/src/main/resources/static`, no build step):
+
+- **Seat map** of the demo show, refreshed every 1.5 s (open two tabs, or switch user between Alice, Bob and Charlie, to watch seats change live).
+- **Book → pay:** pick up to 8 seats, *Hold seats & book*, then choose what the mock gateway does: **Pay ✓** (booking `CONFIRMED`, seats `BOOKED`), **Card declined** (booking `FAILED`, seats freed at once), **Gateway timeout** (money taken, answer lost: payment `UNKNOWN`, seats stay held, reconciliation confirms it within about 40 s), or **Cancel booking**. The saga timeline shows each state change.
+- **Concurrency lab:** *Stampede* sends N concurrent bookings for one seat from N different users (exactly one wins); *Duplicate retries* sends 20 copies of one request with the same `Idempotency-Key` (exactly one booking).
+- **My bookings** (history) and an **HTTP activity** log of every call.
+
+Between demo runs, reset the local data (all bookings, 100 free seats): `docker compose exec -T postgres psql -U ticket -d ticket_reservation < docs/demo/reset-demo.sql`.
+
 Redis is optional: `SEAT_CACHE_ENABLED=false` / `FAST_PATH_ENABLED=false` switch the Redis paths off. If Redis dies at runtime, a circuit breaker sends everything to Postgres within a few requests.
 
 Metrics: `curl localhost:8080/actuator/prometheus | grep -E 'seat_hold|hold_latency|hold_transitions'`.
 
 ## Next milestones
 
-1. Add idempotency persistence, Redis token-bucket rate limiting and waiting room.
-2. Implement payment orchestration and confirmation.
-3. Add transactional outbox, Kafka consumers, hold expiry worker and reconciliation.
-4. Add OpenTelemetry, Grafana, k6 load tests, and Kubernetes deployment.
+1. Transactional outbox and Kafka consumers: notifications, tickets, analytics (Phase 5).
+2. Edge: JWT auth, Redis token-bucket rate limiting and the virtual waiting room (Phase 6).
+3. Hot-event scaling and service extraction (Phase 7).
+4. OpenTelemetry, Grafana, k6 load tests, chaos tests and Kubernetes deployment (Phases 8–11).
