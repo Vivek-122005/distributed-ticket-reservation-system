@@ -67,9 +67,9 @@ class JdbcPaymentStore implements PaymentStore {
 
     @Override
     public List<Payment> findUnresolved(Duration olderThan, int limit) {
-        return jdbc.query(SELECT + """
-                 WHERE status IN ('PROCESSING', 'UNKNOWN') AND updated_at < now() - make_interval(secs => :age)
-                 ORDER BY updated_at LIMIT :limit""",
+        return jdbc.query(SELECT + " " + """
+                WHERE status IN ('PROCESSING', 'UNKNOWN') AND updated_at < now() - make_interval(secs => :age)
+                ORDER BY updated_at LIMIT :limit""",
                 new MapSqlParameterSource().addValue("age", olderThan.toMillis() / 1000.0).addValue("limit", limit), ROW);
     }
 

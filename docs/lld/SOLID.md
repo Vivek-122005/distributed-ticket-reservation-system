@@ -25,7 +25,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `CreateBookingUseCase`, `CancelBookingUseCase`, `BookingQueries` | One class per booking command, reads kept apart; none of them knows HTTP or SQL | ✅ P3.3–P3.8 |
 | `BookingSchemaMigration` | Only migrates the booking schema; the module owns its history table, inventory's Flyway is untouched | ✅ P3.1 |
 | `SeatCacheReconciler` vs `ScheduledSeatCacheReconciliation` | The first decides what is drift and repairs it; the second only decides when to run | ✅ P2.5 |
-| `PaymentReconciliationJob` | Only resolves `UNKNOWN` payments; never creates or refunds them itself | ⬜ P4.8 |
+| `ReconcilePaymentsUseCase` vs `PaymentReconciliationJob` | The use case only asks the gateway and records the answer (never charges or refunds); the job only decides when to run | ✅ P4.8 |
 
 **Without it:** one "BookingService" class doing HTTP, rules, retries and SQL. Every change risks breaking an unrelated path, and the concurrency logic can't be tested on its own.
 

@@ -52,6 +52,15 @@ payment:
     duplicate-webhook-rate: ${PAYMENT_MOCK_DUPLICATE_WEBHOOK_RATE:0.2}
   webhook:
     secret: ${PAYMENT_WEBHOOK_SECRET:local-dev-webhook-secret}
+  reconcile:
+    # P4.8: ask the gateway about payments stuck in UNKNOWN / PROCESSING longer than older-than.
+    interval: ${PAYMENT_RECONCILE_INTERVAL:10s}
+    older-than: ${PAYMENT_RECONCILE_OLDER_THAN:30s}
+booking:
+  saga:
+    recovery:
+      # P4.4-P4.6: resume due sagas (payment checks, hold-expiry timeouts, retries, crash recovery).
+      interval: ${SAGA_RECOVERY_INTERVAL:2s}
 management:
   health:
     redis:

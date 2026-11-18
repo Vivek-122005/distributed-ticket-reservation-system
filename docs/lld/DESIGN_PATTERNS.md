@@ -336,6 +336,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
   - **Waiting room only (P6):** limits how many users get in, but doesn't stop admitted users stampeding one seat. The two are complementary.
 
 ## 27. Reconciliation (anti-entropy)
+- **Also (P4.8):** `payment.application.ReconcilePaymentsUseCase` reconciles our payments against the provider, the source of truth for money: `UNKNOWN` / stuck `PROCESSING` → `fetchStatus(orderId)` → `CAPTURED` or `FAILED`. Same idea as the seat cache: the authority wins, and the repair is idempotent.
 - **Status:** ✅ P2.5 (the payment reconciliation job follows in P4.8)
 - **Where:**
   - **The job:** `inventory.infrastructure.cache.SeatCacheReconciler.reconcile(showId)`, scheduled by `ScheduledSeatCacheReconciliation` every `inventory.reconcile.interval` (30 s).

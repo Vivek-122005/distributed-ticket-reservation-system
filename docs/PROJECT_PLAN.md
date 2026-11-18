@@ -531,7 +531,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 4 — Payment orchestration (Saga) 🔨
+### Phase 4 — Payment orchestration (Saga) ✅
 
 **Goal:** money and seats stay consistent across services without distributed transactions.
 
@@ -542,9 +542,9 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P4.3 ✅ | Webhook handling | `POST /payments/webhooks/mock`: HMAC-SHA256 over the raw body, compared in constant time (bad signature → 401); event ids recorded in `payment.webhook_events` (duplicate → 200 `DUPLICATE`); stale events (a failure after capture) recorded as `IGNORED`; outcome applied before the id is recorded, so a crash in between means a harmless re-apply, never a lost event. `MockWebhookSender` plays the provider: signed events over real HTTP after a delay, 20% sent twice; a TIMEOUT charge sends none. |
 | P4.4 ✅ | **Booking saga orchestrator** | `BookingSaga` + `booking.booking_sagas` (step, attempts, `next_retry_at`, last error), created in the booking's own insert transaction. Steps `AWAITING_PAYMENT → CONFIRMING_SEATS → DONE`; compensations `RELEASING_SEATS` (declined) and `REFUNDING` (captured but seats lost). The step is saved before it runs, every step is idempotent, and a failing step is retried with backoff (1–60 s) instead of failing the caller. Payment outcomes arrive as `PaymentCaptured` / `PaymentFailed` events; a waiting saga also re-checks the payment every 30 s, so a lost event can't strand it. `SagaRecoveryJob` (every 2 s, `SKIP LOCKED` + lease) runs due sagas on any replica. Create-booking now returns the payment summary; cancel withdraws the intent. |
 | P4.5 ✅ | Timeout handling | At the hold's expiry (+2 s grace) an unpaid booking's intent is cancelled and the booking becomes `EXPIRED`; a payment still `PROCESSING` / `UNKNOWN` is waited for, never expired. A capture that arrives after expiry or after a cancel takes the late-payment path: `REFUND_PENDING` → gateway refund → `REFUNDED`. (`BookingExpired` event comes with the outbox, P5.) |
-| P4.6 | Crash recovery | Saga state persisted every step; on restart, a recovery job resumes in-flight sagas. Demo: kill booking-service between "payment captured" and "seat confirmed" → system still converges. |
-| P4.7 | ADR 004 | Orchestration vs choreography: orchestration chosen for a central, debuggable view of a 5-step money flow; choreography used for side effects (notifications etc.). Also why not 2PC/XA (blocking, poor availability, not supported by Kafka/PSP). |
-| P4.8 | **Payment reconciliation job** *(rev)* | Every minute: payments in `UNKNOWN`, or stuck in `PROCESSING` past a timeout, are looked up at the gateway by idempotency key / order id → `CAPTURED` or `FAILED`; the saga continues from there (late capture → refund path). Metric `payments_unknown`; alert if any payment is older than the window (invariant 5). |
+| P4.6 ✅ | Crash recovery | `SagaRecoveryIT` puts the database in the exact state a dead process leaves (payment `CAPTURED` but event never delivered; crash mid-`CONFIRMING_SEATS`; crash after inventory confirmed but before the booking was marked; crash mid-refund) and runs the recovery job as a restarted replica would: every case converges, nothing is confirmed twice. Four replicas recovering 50 due sagas at once: each claimed once, 50 confirmed, 50 seats `BOOKED`. |
+| P4.7 ✅ | ADR 004 | [`docs/adr/004-saga-orchestration.md`](adr/004-saga-orchestration.md): orchestration for the money flow (one place to see and resume it), choreography kept for side effects (P5), 2PC/XA rejected (blocks, providers and Kafka don't take part, impossible after extraction). |
+| P4.8 ✅ | **Payment reconciliation job** *(rev)* | `ReconcilePaymentsUseCase` + `PaymentReconciliationJob` (every 10 s): payments in `UNKNOWN` or `PROCESSING` untouched for 30 s are looked up at the gateway by order id → `CAPTURED` or `FAILED` (declined, never charged, or unknown to the provider). Only asks, never charges or refunds itself; the outcome goes through `PaymentTransitions`, so the saga continues exactly as after checkout (late capture → refund path). Metric `payments_unknown` and the alert move to P8. |
 
 ---
 

@@ -1038,3 +1038,29 @@ A running record of **what was built, in which phase, in which part of the syste
   - **End to end (`BookingSagaIT`, 6 cases):** book → pay → `CONFIRMED` with seats `BOOKED`; decline → `FAILED`, seat free; timeout → `UNKNOWN`, seat stays held; cancel withdraws the intent and a later checkout gets 409; an unpaid booking expires via the recovery job and the seat sells again; a payment after expiry is captured and refunded.
   - **Full `mvn verify`:** 232 tests, 0 failures, 1 skipped (benchmark).
 - **ADR:** 004 (P4.7)
+
+### P4.6–P4.8 — Crash recovery, ADR 004 and payment reconciliation
+- **Date:** 2026-11-18
+- **Module / files:** `payment.application.ReconcilePaymentsUseCase`, `payment.infrastructure.PaymentReconciliationJob`, config `payment.reconcile.*`, `booking.saga.recovery.interval`; fix in `JdbcPaymentStore.findUnresolved`; tests `SagaRecoveryIT`, `BookingTestData` (also clears payments); `docs/adr/004-saga-orchestration.md`.
+- **What was built:**
+  - **Payment reconciliation (P4.8):** every 10 s, payments in `UNKNOWN` or `PROCESSING` untouched for 30 s are looked up at the provider by order id. `CAPTURED` → captured (the saga confirms, or refunds if too late); declined, never charged or unknown to the provider → `FAILED` (the saga frees the seats).
+  - **Crash recovery proof (P4.6):** tests recreate the states a dead process leaves behind and run the recovery job, as a restarted replica would.
+  - **ADR 004 (P4.7):** why the money flow is an orchestrated saga, and why not choreography or 2PC.
+- **Why this approach:**
+  - **Reconciliation only asks:** it can never cause a charge or a refund by itself, so running it too often or on every replica is harmless. Its answers go through the same `PaymentTransitions` as checkout, so the saga needs no special case for "learned by reconciliation".
+  - **The 30 s age threshold** is longer than a gateway call, so an in-flight checkout is never raced.
+  - **Crash states built in SQL** rather than killing a JVM inside the test: each interesting crash point gets its own deterministic test, which a random kill can't guarantee. A kill of the real process is part of the live demo.
+- **Problems found (and fixed):**
+  - **SQL concatenation:** `findUnresolved` glued `FROM payment.payments` to `WHERE` (a text block's leading space is stripped), so the first reconciliation run failed with a syntax error. An explicit separator fixes it, covered by the new tests.
+  - **Order-dependent test data, caught before CI:** payments outlived the bookings that the shared reset deleted, so a test running reconciliation over *all* unresolved payments could count another test's leftovers (the same class of bug as the P2.5 CI failure). `BookingTestData.reset` now clears payments too; checked by running the saga tests in a fixed alphabetical order.
+- **Alternatives considered:**
+  - **Treating `PROCESSING` with no provider record as still in flight forever:** a crash before the gateway call would hold the seats until someone looked. The age threshold makes it safe to call it "no money moved".
+  - **Reconciling inside the saga's payment check:** mixes the money authority (payment module) with booking's flow; reconciliation belongs to payment, and the saga just reacts.
+- **How it was verified:** `SagaRecoveryIT`, 8 cases: captured-but-event-lost converges to `CONFIRMED`; crash mid-confirm repeats the step; crash after inventory confirmed finishes without confirming twice; crash mid-refund retries the refund; 4 concurrent replicas over 50 due sagas claim each once and confirm all 50 (50 seats `BOOKED`); a lost gateway answer is reconciled to `CAPTURED` and the booking confirmed; a payment the gateway never charged is reconciled to `FAILED`, freeing the seat; recent payments are left alone. Saga tests also pass in a forced alphabetical order.
+- **ADR:** [004](adr/004-saga-orchestration.md)
+
+**Phase 4 complete:**
+- **Payments:** a payment module with its own schema, an honest `UNKNOWN` state, and a mock gateway that can decline, or take the money and lose the answer, on demand.
+- **Webhooks:** signed, deduplicated, and stale ones ignored.
+- **The saga:** hold → pay → confirm, with compensations for decline, expiry, cancel and late payment; it survives crashes at any step and runs on any number of replicas.
+- **Reconciliation:** any payment we're unsure about is settled against the provider.
