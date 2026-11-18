@@ -26,7 +26,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 9 | [Facade](#9-facade) | Structural (GoF) | 🔨 P0.14 (inventory) | `InventoryApi` → `InventoryFacade`; `PaymentApi` in P4.1 |
 | 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
-| 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | ⬜ P3.4, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
+| 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | 🔨 HTTP ✅ P3.4–P3.5; ⬜ P4.3, P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
 | 13 | [Template Method](#13-template-method) | Behavioural (GoF) | ⬜ P5.5 | `IdempotentEventConsumer` |
 | 14 | [Observer / Publish-Subscribe](#14-observer--publish-subscribe) | Behavioural (GoF) | 🔨 in-process ✅ P2.1; Kafka ⬜ P5 | `InventoryEventPublisher` → `@TransactionalEventListener`s; later outbox → Kafka |
 | 15 | [Factory](#15-factory) | Creational (GoF) | ⬜ P5.1 | `EventEnvelopeFactory` |
@@ -165,8 +165,20 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** publish after commit (an event is lost on crash), Kafka transactions (they don't cover the Postgres write), Debezium CDC (stretch, P5.10).
 
 ## 12. Idempotent Receiver / Idempotency Key
-- **Status:** ⬜ P3.4–P3.5 (HTTP), P4.3 (webhooks), P5.5 (Kafka)
-- **Plan:** an `idempotency_keys` table with a request hash and the stored response; a `processed_events` insert in the same transaction as the consumer's side effect.
+- **Status:** 🔨 ✅ P3.4–P3.5 (HTTP); ⬜ P4.3 (webhooks), P5.5 (Kafka)
+- **Where (HTTP):** `common.idempotency.{IdempotencyFilter, IdempotencyStore, JdbcIdempotencyStore}`; booking registers it in `booking.infrastructure.BookingIdempotencyConfig` with the table `booking.idempotency_keys` (`V2__idempotency_keys.sql`); `IdempotencyKeyPurge` deletes expired keys. Tests: `IdempotencyIT`.
+- **Problem:** a client that times out cannot know whether its booking was created. Retrying must not create a second booking (and later, a second charge).
+- **How:**
+  - **Claim in one statement:** `INSERT … ON CONFLICT (user_id, idem_key) DO UPDATE … WHERE expired OR (same request AND lease lapsed) RETURNING 1`. Exactly one of N concurrent requests gets a row; the others read it and get *replay* (completed), *409 + Retry-After* (in progress) or *422* (different body).
+  - **Fingerprint:** SHA-256 of method, path and body. Keys are scoped per user, so one user can never read another's stored answer.
+  - **What is stored:** status, content type, `Location` and body of every answer below 500, including 4xx (the same request gets the same answer). 5xx and exceptions abandon the claim so the retry runs again.
+  - **Crash recovery:** a claim not completed within the lease (30 s) can be taken over by the *same* request.
+- **Why a servlet filter:** a Spring `HandlerInterceptor` cannot capture and replay the response body; a filter wraps the response. Being in `common` and parameterised by table and paths, any module gets the same behaviour by registering it (OCP).
+- **Alternative:**
+  - **Unique constraint on a business key** (for example one pending booking per user and show): prevents duplicates but can't return the original response, and blocks legitimate second bookings.
+  - **Redis `SET NX` for the claim:** fast, but the stored response would be lost on eviction or failover, which is exactly when a replay is needed.
+  - **Holding a row lock (`SELECT … FOR UPDATE`) for the whole request:** concurrent retries would queue on the lock and each hold a pooled connection; the lease-based claim answers them immediately.
+- **Plan (rest):** signed webhooks deduplicated by event id (P4.3); a `processed_events` insert in the same transaction as the consumer's side effect (P5.5).
 - **Why:** every channel is at-least-once, so duplicates must be harmless (HLD §5.2).
 - **Alternative:** a Redis-only key store. Fast, but keys are lost on eviction or failover.
 

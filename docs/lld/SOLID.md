@@ -35,6 +35,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 |---|---|---|
 | `SeatLockingStrategy` | A new locking approach is a new class plus one `case` in `SeatLockingConfig` and a config value; `CreateHoldUseCase` does not change (five strategies exist) | ✅ P1.7 |
 | `PaymentGateway` | Adding Stripe next to Razorpay is a new adapter, not an edit to payment logic | ⬜ P4.1 |
+| `IdempotencyFilter` | A new idempotent endpoint (or module) registers the filter for its paths with its own table; the filter and store are not edited | ✅ P3.5 |
 | `IdempotentEventConsumer` | A new consumer extends the base; dedup and retry code stays untouched | ⬜ P5.5 |
 | Kafka pub/sub | A new side effect (for example SMS) is a new consumer group; producers are unchanged | ⬜ P5 |
 

@@ -896,3 +896,29 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Booking row first, then hold:** a row would exist for seats that may never be held, and a failed hold leaves a booking to clean up. Holding first means a booking always has seats.
 - **How it was verified:** `CreateBookingUseCaseTest` (a failed insert releases the hold); `CreateBookingIT` (5 cases: pending booking with prices and Location, taken seat creates nothing and holds nothing, unknown show, another user's booking, 9 seats rejected); `CreateHoldIT`, `CatalogReadIT`, `ApplicationStartupIT` still pass after the `ApiError` move.
 - **ADR:** none
+
+### P3.4–P3.5 — Idempotency keys as a reusable filter
+- **Date:** 2026-11-18
+- **Module / files:**
+  - **Shared (`common`):** `common.idempotency.{IdempotencyFilter, IdempotencyStore, JdbcIdempotencyStore, CachedBodyRequest}`; `common/pom.xml` now depends on spring-web, spring-context, spring-jdbc and Jackson (still no module code, ArchUnit rule 4).
+  - **Booking:** `V2__idempotency_keys.sql`, `booking.infrastructure.{BookingIdempotencyConfig, IdempotencyKeyPurge}`.
+  - **Tests:** `IdempotencyIT`; `BookingTestData` clears the keys.
+  - **Docs:** `docs/api/booking-service.yaml` (`Idempotent-Replayed` header).
+- **What was built:**
+  - **Every `POST` under `/api/v1/bookings`** must carry `Idempotency-Key` (missing → `400 INVALID_REQUEST`).
+  - **First request:** claims `(user, key)` in `booking.idempotency_keys`, runs, and stores the answer (status, content type, `Location`, body).
+  - **Retry, same body:** the stored answer is replayed byte for byte, with `Idempotent-Replayed: true`. This includes rejections: a retried `409 SEAT_UNAVAILABLE` stays a 409 even if the seat has since been freed.
+  - **Retry, different body:** `422 IDEMPOTENCY_KEY_REUSED`. **Retry while the first still runs:** `409 IDEMPOTENCY_IN_PROGRESS`, `Retry-After: 1`.
+  - **Failures are not remembered:** a 5xx or an exception deletes the claim, so the client's retry runs again.
+  - **Crash recovery:** a claim not completed within 30 s (the lease) may be taken over by the same request. Expired keys (24 h) can be reused and are purged every 10 minutes.
+- **Why this approach:**
+  - **One-statement claim** (`INSERT … ON CONFLICT DO UPDATE … WHERE expired OR lease lapsed RETURNING`): exactly one concurrent request wins, and no lock is held while the request runs, so duplicates are answered at once instead of queueing on a pooled connection.
+  - **Per-user keys:** no collisions between users, and no way to read someone else's stored response.
+  - **A filter in `common`, a table per module:** booking (and later payment) get identical behaviour by registering it, while each module keeps its keys next to its data (ADR 002).
+- **Alternatives considered:**
+  - **Spring `HandlerInterceptor`:** it can't capture and replay the response body.
+  - **Redis for keys:** a stored response lost on eviction or failover is lost exactly when a retry needs it.
+  - **Row lock for the whole request:** correct, but concurrent retries each pin a database connection while they wait.
+  - **Storing 4xx answers as "not processed":** a retried rejection could then succeed later with a different outcome, which breaks "same request, same answer" (Stripe's semantics, which we follow).
+- **How it was verified:** `IdempotencyIT`, 8 cases: replay returns the same body and `Location` and creates one booking; a stored 409 is replayed after the seat is freed; different body → 422; keys are per user; missing key → 400; in-progress → 409 with `Retry-After`; a lapsed lease is taken over by the same request but not by a different one; an expired key is reusable. `CreateBookingIT` still passes.
+- **ADR:** none

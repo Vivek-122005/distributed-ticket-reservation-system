@@ -56,6 +56,9 @@ paths:
             Location:
               schema: { type: string }
               description: URL of the new booking.
+            Idempotent-Replayed:
+              schema: { type: string, enum: ['true'] }
+              description: Present when this is the stored answer to an earlier request with the same Idempotency-Key.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Booking' }

@@ -7,6 +7,7 @@ public final class BookingTestData {
     private BookingTestData() { }
 
     public static void reset(JdbcTemplate jdbc) {
+        jdbc.update("DELETE FROM booking.idempotency_keys");
         jdbc.update("DELETE FROM booking.booking_seats");
         jdbc.update("DELETE FROM booking.bookings");
         InventoryTestData.reset(jdbc);
