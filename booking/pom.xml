@@ -13,6 +13,8 @@
     <dependency><groupId>com.vivek</groupId><artifactId>common</artifactId></dependency>
     <!-- Only inventory.api is used (ArchUnit rule 1), through the InventorySeatReservations adapter. -->
     <dependency><groupId>com.vivek</groupId><artifactId>inventory</artifactId></dependency>
+    <!-- Only payment.api is used (ArchUnit rule 1), through the PaymentModulePayments adapter. -->
+    <dependency><groupId>com.vivek</groupId><artifactId>payment</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>

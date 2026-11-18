@@ -1,6 +1,8 @@
 package com.vivek.ticketreservation.booking.application;
 
 import com.vivek.ticketreservation.booking.application.port.BookingStore;
+import com.vivek.ticketreservation.booking.application.port.Payments.PaymentInfo;
+import com.vivek.ticketreservation.booking.application.port.SagaStore;
 import com.vivek.ticketreservation.booking.application.port.SeatReservations;
 import com.vivek.ticketreservation.booking.application.port.SeatReservations.Reservation;
 import com.vivek.ticketreservation.booking.domain.Booking;
@@ -8,18 +10,19 @@ import com.vivek.ticketreservation.booking.domain.BookingSeat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Hold the seats, then record a {@code PENDING_PAYMENT} booking for that hold (plan §4.5, P3.3).
+ * The first saga steps (plan §4.5, P3.3 + P4.4): hold the seats, record a {@code PENDING_PAYMENT}
+ * booking <b>and its saga row in one transaction</b>, then create the payment intent.
  *
- * <p>Two steps in two modules, so two transactions: inventory commits the hold, then booking commits
- * the booking. If the second step fails, the hold is released at once (compensation) instead of
- * blocking the seats until it expires; if even the release fails, the hold's 5-minute expiry is the
- * backstop. Retrying the whole request is safe because of the idempotency key (P3.4). Payment intent
- * creation is added as the next saga step in P4.4.
+ * <p>Hold and booking live in two modules, so two transactions: if the booking can't be saved the hold
+ * is released at once (and expires anyway if even that fails). Booking and saga share a transaction,
+ * so there is never a booking the recovery job doesn't know about. A failed intent is compensated by
+ * the saga (seats released, booking FAILED). Retrying the request is safe: idempotency key (P3.4).
  */
 @Service
 public class CreateBookingUseCase {
@@ -27,25 +30,39 @@ public class CreateBookingUseCase {
 
     private final SeatReservations seats;
     private final BookingStore bookings;
+    private final SagaStore sagas;
+    private final BookingSaga saga;
+    private final TransactionOperations tx;
 
-    public CreateBookingUseCase(SeatReservations seats, BookingStore bookings) {
+    public CreateBookingUseCase(SeatReservations seats, BookingStore bookings, SagaStore sagas, BookingSaga saga,
+                                TransactionOperations tx) {
         this.seats = seats;
         this.bookings = bookings;
+        this.sagas = sagas;
+        this.saga = saga;
+        this.tx = tx;
     }
 
     public record Command(UUID userId, UUID showId, List<String> seatCodes) { }
 
     public BookingView execute(Command command) {
         Reservation hold = seats.hold(command.showId(), command.userId(), command.seatCodes());
-        Booking booking = Booking.pending(UUID.randomUUID(), command.userId(), command.showId(), hold.holdId(),
+        Booking pending = Booking.pending(UUID.randomUUID(), command.userId(), command.showId(), hold.holdId(),
                 hold.seats().stream().map(s -> new BookingSeat(s.seatCode(), s.priceMinor())).toList(),
                 hold.currency(), hold.expiresAt());
+        Booking booking;
         try {
-            return BookingView.of(bookings.insert(booking));
+            booking = tx.execute(status -> {
+                Booking saved = bookings.insert(pending);
+                sagas.create(saved.id(), saga.firstCheck(saved.holdExpiresAt()));
+                return saved;
+            });
         } catch (RuntimeException e) {
             compensate(hold, command.userId(), e);
             throw e;
         }
+        PaymentInfo payment = saga.start(booking);
+        return BookingView.of(booking, payment);
     }
 
     private void compensate(Reservation hold, UUID userId, RuntimeException cause) {

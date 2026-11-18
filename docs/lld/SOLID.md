@@ -21,7 +21,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `JdbcHoldStore`, `JdbcShowStore` | Only row ↔ aggregate mapping for one table each | ✅ P1.3 |
 | `Hold`, `ShowSeat`, `Show` | Only their own state rules; no persistence or HTTP | ✅ P1.3 |
 | Use cases `CreateHoldUseCase`, `ConfirmHoldUseCase`, `ReleaseHoldUseCase`, `GetHoldUseCase`; `ExpireHoldsJob` | One class per use case, replacing the single `InventoryApplicationService`; the shared result mapping lives once in `HoldViews`. Expiry: *what* to do is in `ExpireHoldsJob`, *when* (scheduling, batching, poison isolation) in `infrastructure.ScheduledHoldExpiry` | ✅ P1.4, P2.1 |
-| `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal* | 🔨 `Booking` ✅ P3.2; saga ⬜ P4.4 |
+| `BookingSaga` vs `Booking` | The saga decides *what to do next*; the aggregate decides *which transitions are legal*; `SagaRecoveryJob` only decides *when* to resume | ✅ P3.2, P4.4 |
 | `CreateBookingUseCase`, `CancelBookingUseCase`, `BookingQueries` | One class per booking command, reads kept apart; none of them knows HTTP or SQL | ✅ P3.3–P3.8 |
 | `BookingSchemaMigration` | Only migrates the booking schema; the module owns its history table, inventory's Flyway is untouched | ✅ P3.1 |
 | `SeatCacheReconciler` vs `ScheduledSeatCacheReconciliation` | The first decides what is drift and repairs it; the second only decides when to run | ✅ P2.5 |
@@ -75,6 +75,7 @@ Legend: ✅ applied in code · ⬜ planned (plan part) · ⚠️ known deviation
 | `FilteredCreateHold` → `SeatFilter` | The fast path is a port with two implementations (Redis, pass-through Null Object); `CreateHoldUseCase` didn't change at all (OCP) | ✅ P2.4 |
 | Facade → `HoldMetrics` | Business metrics go through an application port; Micrometer lives only in `infrastructure.MicrometerHoldMetrics` | ✅ P1.9 |
 | `InventoryController` → `InventoryApi` | The HTTP adapter depends on the module interface, not on the use-case class | ✅ P0.14 |
+| Saga → `Payments`, `SagaStore`, `Clock` | `BookingSaga` depends only on booking's ports and an injected clock, so every path (expiry, late payment, lost event, retry) is unit-tested in milliseconds with fakes (`BookingSagaTest`); `PaymentModulePayments` adapts `PaymentApi` | ✅ P4.4 |
 | Booking → `SeatReservations` | `CreateBookingUseCase` depends on booking's own port; `InventorySeatReservations` adapts `InventoryApi` in-process, and the HTTP adapter (P7.8) will replace it without touching the use case. Unit-tested with fakes (`CreateBookingUseCaseTest`) | ✅ P3.3 |
 | Domain → nothing | Domain classes import no Spring, Jackson, JPA or JDBC, enforced by ArchUnit (`ModuleBoundaryTest.domainIsFrameworkFree`) | ✅ P1.3 |
 

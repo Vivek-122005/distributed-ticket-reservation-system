@@ -1008,3 +1008,33 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Rejecting unknown order ids with 404:** the provider would retry; they are recorded as `IGNORED` instead.
 - **How it was verified:** `WebhookIT`, 6 cases: capture applied once and a repeated event id is `DUPLICATE`; a second capture event with a new id is harmless and announced once; a failure after capture is `IGNORED`; a webhook resolves an `UNKNOWN` payment; a forged signature gets 401 and changes nothing; after a real checkout the mock provider's webhook arrives over HTTP, is accepted, and `PaymentCaptured` is still published once. `PaymentIT` still passes.
 - **ADR:** none
+
+### P4.4–P4.5 — The booking saga, expiry and the late-payment refund
+- **Date:** 2026-11-18
+- **Module / files:**
+  - **Schema:** `booking/…/V3__booking_sagas.sql`.
+  - **Application:** `BookingSaga`, `BookingTransitions`, `PaymentUnavailableException`; ports `SagaStore`, `Payments`; `CreateBookingUseCase` (booking + saga in one transaction, then intent), `CancelBookingUseCase` (withdraws the intent), `BookingQueries` (payment summary, batched per page), `BookingView`.
+  - **Adapters:** `JdbcSagaStore`, `PaymentModulePayments`, `PaymentEventListener`, `SagaRecoveryJob`, `BookingSagaConfig` (clock); web `BookingResponse.payment`.
+  - **Tests:** `BookingSagaTest`, `Fakes`, `CreateBookingUseCaseTest` (unit); `BookingSagaIT`; `BookingTestData` helpers.
+- **What was built:**
+  - **Forward path:** `POST /bookings` → seats held → booking `PENDING_PAYMENT` + saga `AWAITING_PAYMENT` (one transaction) → payment intent; the response carries `payment {paymentId, status, gateway, gatewayOrderId}`. Paying (`POST /payments/{id}/checkout`) publishes `PaymentCaptured`; the saga moves to `CONFIRMING_SEATS`, confirms the hold (seats `BOOKED`), marks the booking `CONFIRMED`, and finishes `DONE`.
+  - **Compensations:** declined → seats released, booking `FAILED`; intent can't be created → seats released, booking `FAILED`, 503 to the client; cancel → intent withdrawn.
+  - **Timeouts (P4.5):** at hold expiry + 2 s an unpaid booking is `EXPIRED` and its intent `CANCELLED`, so a late click can't charge. A payment still `PROCESSING` / `UNKNOWN` is waited for instead: the booking is never expired while money may be moving.
+  - **Late payment:** a capture after expiry or after a cancel can't get its seats, so the saga moves the booking to `REFUND_PENDING`, refunds at the gateway and ends `REFUNDED`.
+  - **Recovery:** `SagaRecoveryJob` claims due sagas (`SKIP LOCKED` + 30 s lease) every 2 s on every replica and resumes the saved step. A waiting saga re-checks its payment every 30 s.
+- **Why this approach:**
+  - **Orchestration:** one class shows the whole money flow and its compensations, and its state is a row you can query. Full reasoning in ADR 004 (P4.7).
+  - **Saga row in the booking's transaction:** a booking without a saga would be invisible to recovery.
+  - **Step saved before it runs, idempotent steps, retry instead of throw:** together these mean any crash point is recovered by simply running the saved step again.
+  - **Wait, don't expire, while a payment is in flight:** expiring a booking whose payment later succeeds would only create refund work; waiting for the outcome is cheap because reconciliation bounds it.
+  - **Synchronous in-process events for now:** checkout returns with the booking already confirmed, which keeps the demo and the tests simple; the outbox (P5) makes them durable and asynchronous.
+- **Problem found (and fixed):** the first end-to-end run of the late-payment test expected checkout to answer `CAPTURED`, but it answered `REFUNDED`: the synchronous saga had already refunded before the checkout call returned. That is the correct behaviour; the test now asserts it.
+- **Alternatives considered:**
+  - **Choreography** (inventory and payment reacting to each other's events): no single place shows where a booking is or why it is stuck.
+  - **Expiring on a timer per booking** (in-memory scheduler): lost on restart; a `next_retry_at` column survives crashes and works across replicas.
+  - **Releasing seats on `UNKNOWN`:** wrong if the money moved (plan §4.4b).
+- **How it was verified:**
+  - **Unit (`BookingSagaTest`, 10 cases):** confirm; repeated capture harmless; decline; capture after expiry refunded; capture after cancel refunded; unpaid booking expires and its intent is withdrawn; never expired while `UNKNOWN`; a lost capture event found by the payment check; a check before expiry only reschedules; a failing step is retried later, not thrown. `CreateBookingUseCaseTest`: intent failure fails the booking and frees the seats.
+  - **End to end (`BookingSagaIT`, 6 cases):** book → pay → `CONFIRMED` with seats `BOOKED`; decline → `FAILED`, seat free; timeout → `UNKNOWN`, seat stays held; cancel withdraws the intent and a later checkout gets 409; an unpaid booking expires via the recovery job and the seat sells again; a payment after expiry is captured and refunded.
+  - **Full `mvn verify`:** 232 tests, 0 failures, 1 skipped (benchmark).
+- **ADR:** 004 (P4.7)

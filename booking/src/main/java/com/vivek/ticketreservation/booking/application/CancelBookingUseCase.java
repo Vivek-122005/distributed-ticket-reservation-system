@@ -18,8 +18,8 @@ import java.util.UUID;
  * possible: if payment won the race and the hold is already confirmed, the release is refused and the
  * booking is not cancelled. Only after a successful release is the booking marked {@code CANCELLED},
  * with an optimistic-lock retry in case another step changed it meanwhile. A payment that is
- * captured after the cancel goes to the refund path (P4.5). Cancelling the payment intent is added
- * in P4.4.
+ * captured after the cancel goes to the refund path (P4.5). Finally the saga withdraws the payment
+ * intent (P4.4), so the user can no longer pay for seats they gave up.
  */
 @Service
 public class CancelBookingUseCase {
@@ -27,15 +27,19 @@ public class CancelBookingUseCase {
 
     private final BookingStore bookings;
     private final SeatReservations seats;
+    private final BookingSaga saga;
+    private final BookingQueries queries;
 
-    public CancelBookingUseCase(BookingStore bookings, SeatReservations seats) {
+    public CancelBookingUseCase(BookingStore bookings, SeatReservations seats, BookingSaga saga, BookingQueries queries) {
         this.bookings = bookings;
         this.seats = seats;
+        this.saga = saga;
+        this.queries = queries;
     }
 
     public BookingView execute(UUID bookingId, UUID userId) {
         Booking booking = load(bookingId, userId);
-        if (booking.status() == BookingStatus.CANCELLED) return BookingView.of(booking);
+        if (booking.status() == BookingStatus.CANCELLED) return queries.get(bookingId, userId);
         if (booking.status() != BookingStatus.PENDING_PAYMENT) {
             throw new IllegalStateTransitionException(bookingId, booking.status(), BookingStatus.CANCELLED);
         }
@@ -49,13 +53,14 @@ public class CancelBookingUseCase {
             }
         }
 
-        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            if (booking.status() == BookingStatus.CANCELLED) return BookingView.of(booking);
+        for (int attempt = 0; booking.status() != BookingStatus.CANCELLED; attempt++) {
+            if (attempt == MAX_ATTEMPTS) throw new IllegalStateException("Booking " + bookingId + " kept changing while being cancelled");
             booking.cancel();   // throws if another step moved it to a non-cancellable state
-            if (bookings.updateStatus(booking)) return BookingView.of(load(bookingId, userId));
+            if (bookings.updateStatus(booking)) break;
             booking = load(bookingId, userId);
         }
-        throw new IllegalStateException("Booking " + bookingId + " kept changing while being cancelled");
+        saga.onCancelled(bookingId);
+        return queries.get(bookingId, userId);
     }
 
     private Booking load(UUID bookingId, UUID userId) {

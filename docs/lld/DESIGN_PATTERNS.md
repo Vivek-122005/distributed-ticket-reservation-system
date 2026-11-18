@@ -24,7 +24,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 7 | [Strategy](#7-strategy) | Behavioural (GoF) | ✅ P1.7 | `SeatLockingStrategy` ← 5 strategies, chosen by `SeatLockingConfig` |
 | 8 | [Adapter](#8-adapter) | Structural (GoF) | 🔨 ✅ P3.3, P4.1; ⬜ P7.8 (HTTP) | `InventorySeatReservations` (booking → `InventoryApi`), `MockPaymentGateway` (`PaymentGateway`) |
 | 9 | [Facade](#9-facade) | Structural (GoF) | ✅ P0.14, P4.1 | `InventoryApi` → `InventoryFacade`; `PaymentApi` → `PaymentFacade` |
-| 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ⬜ P4.4 | `BookingSaga` |
+| 10 | [Saga (Orchestrator)](#10-saga-orchestrator) | Distributed | ✅ P4.4–P4.5 | `BookingSaga` + `booking_sagas`, `SagaRecoveryJob` |
 | 11 | [Transactional Outbox](#11-transactional-outbox) | Distributed | ⬜ P5.2–P5.3 | `OutboxWriter`, `OutboxRelay` |
 | 12 | [Idempotent Receiver / Idempotency Key](#12-idempotent-receiver--idempotency-key) | Distributed | 🔨 HTTP ✅ P3.4–P3.5, webhooks ✅ P4.3; ⬜ P5.5 | `IdempotencyInterceptor`, `IdempotentEventConsumer` |
 | 13 | [Template Method](#13-template-method) | Behavioural (GoF) | ⬜ P5.5 | `IdempotentEventConsumer` |
@@ -36,7 +36,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 19 | [Token Bucket](#19-token-bucket) | Rate limiting | ⬜ P6.3 | `token_bucket.lua` |
 | 20 | [Fencing token](#20-fencing-token) | Concurrency | ✅ P1.7 | `RedisLockStrategy` + `show_seats.lock_fence` |
 | 22 | [Decorator](#22-decorator) | Structural (GoF) | ✅ P1.7, P2.3 | `RedisLuaStrategy` wraps `ConditionalUpdateStrategy`; `CachedCatalogReadStore` wraps `JdbcCatalogReadStore` |
-| 23 | [Competing consumers (SKIP LOCKED work queue)](#23-competing-consumers-skip-locked-work-queue) | Concurrency | ✅ P2.1–P2.2 | `ExpireHoldsJob` via `JdbcHoldStore.lockExpired` |
+| 23 | [Competing consumers (SKIP LOCKED work queue)](#23-competing-consumers-skip-locked-work-queue) | Concurrency | ✅ P2.1–P2.2, P4.4 | `ExpireHoldsJob` via `JdbcHoldStore.lockExpired`; `SagaRecoveryJob` via `JdbcSagaStore.claimDue` |
 | 24 | [Versioned last-writer-wins](#24-versioned-last-writer-wins-order-independent-cache-updates) | Consistency | ✅ P2.3 | `SeatStateCache.APPLY` + row `version` in `SeatsChanged` |
 | 25 | [Null Object](#25-null-object) | Behavioural | ✅ P2.4 | `NoSeatFilter` (pass-through `SeatFilter`) |
 | 26 | [Fast-reject filter (cache as filter, DB as authority)](#26-fast-reject-filter-cache-as-filter-db-as-authority) | Performance | ✅ P2.4 | `FilteredCreateHold` + `RedisSeatFilter` |
@@ -155,8 +155,10 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 - **Alternative:** modules calling each other's services and repositories directly. Fast at first, but they become entangled.
 
 ## 10. Saga (Orchestrator)
-- **Status:** ⬜ P4.4
-- **Plan:** `BookingSaga` keeps the persisted step, attempts and `next_retry_at`. Steps: hold → create intent → await capture → confirm hold → confirm booking. Compensations: release hold, cancel intent, refund.
+- **Status:** ✅ P4.4–P4.5
+- **Where:** `booking.application.BookingSaga` (orchestrator), `booking.domain.SagaStep`, port `SagaStore` → `infrastructure.JdbcSagaStore` (`booking.booking_sagas`, `V3__booking_sagas.sql`), `infrastructure.SagaRecoveryJob`, `infrastructure.PaymentEventListener`; booking's ports to the other modules `SeatReservations` and `Payments`. Tests: `BookingSagaTest` (every path with in-memory fakes), `BookingSagaIT` (end to end over HTTP).
+- **Steps:** hold (in `CreateBookingUseCase`) → booking + saga row in one transaction → create intent → `AWAITING_PAYMENT` → `CONFIRMING_SEATS` → booking `CONFIRMED` → `DONE`. Compensations: intent creation failed → release seats, booking `FAILED`; declined → `RELEASING_SEATS`, booking `FAILED`; hold expired unpaid → cancel intent, booking `EXPIRED`; captured but hold expired or released → `REFUNDING`, booking `REFUND_PENDING → REFUNDED`.
+- **Three rules that make it crash-safe:** save the step before doing it; every step is idempotent; a failing step is recorded with backoff and retried by `SagaRecoveryJob`, never thrown at the caller. A waiting saga also re-checks its payment every 30 s, so a lost event costs latency, not correctness.
 - **Why:** there is no ACID transaction across inventory, booking and the PSP. The orchestrator gives one place to see and resume the money flow.
 - **Alternative:** choreography (services react to each other's events). Rejected for the money flow, used for side effects. 2PC/XA was rejected because it blocks and PSPs and Kafka don't support it. Full reasoning: ADR 004 (P4.7).
 

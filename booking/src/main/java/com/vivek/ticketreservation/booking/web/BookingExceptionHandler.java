@@ -1,6 +1,7 @@
 package com.vivek.ticketreservation.booking.web;
 
 import com.vivek.ticketreservation.booking.application.BookingNotFoundException;
+import com.vivek.ticketreservation.booking.application.PaymentUnavailableException;
 import com.vivek.ticketreservation.booking.application.port.SeatReservationException;
 import com.vivek.ticketreservation.booking.domain.IllegalStateTransitionException;
 import com.vivek.ticketreservation.common.web.ApiError;
@@ -46,7 +47,7 @@ class BookingExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     ApiError invalid(IllegalArgumentException error) { return ApiError.of("INVALID_REQUEST", error.getMessage(), false); }
 
-    @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessException.class})
+    @ExceptionHandler({DataAccessResourceFailureException.class, TransientDataAccessException.class, PaymentUnavailableException.class})
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
     ApiError unavailable(Exception error) {
         return ApiError.of("SERVICE_UNAVAILABLE", "A dependency is unavailable, retry with backoff", true);
