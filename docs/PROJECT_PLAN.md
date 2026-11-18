@@ -512,7 +512,7 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 
 ---
 
-### Phase 3 — Booking service & idempotency 🔨
+### Phase 3 — Booking service & idempotency ✅
 
 **Goal:** a booking aggregate with a strict lifecycle and exactly-once request semantics.
 
@@ -524,8 +524,8 @@ Legend: ✅ done · 🔨 partly done · ⬜ not started. Each part should be one
 | P3.4 ✅ | **Idempotency keys** | Table `idempotency_keys(key, user_id, request_hash, status, response, expires_at)`. Flow: `INSERT … ON CONFLICT DO NOTHING` → if new, process and store response; if existing & completed → return stored response; if existing & in-progress → `409 Retry-After`; if same key with different body → `422`. Built as `booking.idempotency_keys`, key scoped per user (PK `(user_id, idem_key)`); the claim is one `INSERT … ON CONFLICT DO UPDATE … WHERE expired OR lease lapsed RETURNING`, so no lock is held while the request runs. 5xx answers are not stored (the retry runs again); a claim not completed within 30 s can be taken over by the same request (crash recovery). |
 | P3.5 ✅ | Idempotency as reusable filter | `common.idempotency.IdempotencyFilter` (servlet filter, not an interceptor: it has to see and replay the raw response body) + `IdempotencyStore` port + `JdbcIdempotencyStore(table)`. A module registers it for its paths with its own table (`BookingIdempotencyConfig` for `/api/v1/bookings/**`). Replays carry `Idempotent-Replayed: true`. |
 | P3.6 ✅ | Tests | `BookingConcurrencyIT`: 50 concurrent duplicates (same user and key) → one booking, every 201 the same booking id, the rest `IDEMPOTENCY_IN_PROGRESS`; a client that times out after 1 ms and retries gets the original booking, not a second one; 200 users racing for the same two seats → one booking; 20 users × 5 duplicates → 20 bookings, one per user. Test data through an immutable `BookingRequestBuilder` (Builder). |
-| P3.7 | Cancel booking *(rev)* | `POST /bookings/{id}/cancel` while `PENDING_PAYMENT` → release hold, cancel payment intent; idempotent. |
-| P3.8 | Booking history *(rev)* | `GET /bookings` (current user, paginated, newest first) and `GET /bookings/{id}`. |
+| P3.7 ✅ | Cancel booking *(rev)* | `POST /bookings/{id}/cancel` while `PENDING_PAYMENT` → release the hold **first** (inventory refuses if payment already confirmed it, and then the booking is not cancelled), then `CANCELLED` with an optimistic-lock retry; idempotent (a cancelled booking is returned unchanged, whatever the key). Cancelling the payment intent is added with the saga (P4.4). |
+| P3.8 ✅ | Booking history *(rev)* | `GET /bookings?status=&page=&size=` (current user only, newest first, size ≤ 50, `totalItems`) and `GET /bookings/{id}` (P3.3). Reads only the booking schema (seat copies), never inventory; pages over bookings first, then joins their seat lines. |
 
 **Alternatives to note:** Redis-only idempotency (fast, but lost on eviction/failover → duplicates); unique constraint on natural key (works only when a natural key exists).
 

@@ -41,7 +41,7 @@ Legend: ✅ implemented · 🔨 partly implemented · ⬜ planned (plan part in 
 | 25 | [Null Object](#25-null-object) | Behavioural | ✅ P2.4 | `NoSeatFilter` (pass-through `SeatFilter`) |
 | 26 | [Fast-reject filter (cache as filter, DB as authority)](#26-fast-reject-filter-cache-as-filter-db-as-authority) | Performance | ✅ P2.4 | `FilteredCreateHold` + `RedisSeatFilter` |
 | 27 | [Reconciliation (anti-entropy)](#27-reconciliation-anti-entropy) | Consistency | ✅ P2.5 | `SeatCacheReconciler` |
-| 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5, Redis read model P2.3 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
+| 21 | [Read/write separation (CQRS-lite)](#21-readwrite-separation-cqrs-lite) | Architectural | ✅ P1.5, Redis read model P2.3, booking history P3.8 | `CatalogQuery`, `SeatMapQuery` → `CatalogQueries` → `CatalogReadStore` |
 
 ---
 

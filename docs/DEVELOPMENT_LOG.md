@@ -938,3 +938,24 @@ A running record of **what was built, in which phase, in which part of the syste
   - **Simulating the timeout with a sleep in production code:** rejected; a 1 ms client timeout exercises the real path without test hooks in `main`.
 - **How it was verified:** `BookingConcurrencyIT`, 4 tests pass in 4.8 s.
 - **ADR:** none
+
+### P3.7–P3.8 — Cancel a pending booking; booking history
+- **Date:** 2026-11-18
+- **Module / files:** `booking.application.{CancelBookingUseCase, BookingQueries.history}`, `BookingStore.{findByUser, countByUser}` and `JdbcBookingStore`, `BookingController` (`POST /{id}/cancel`, `GET /bookings`); tests `CancelAndHistoryIT`.
+- **What was built:**
+  - **Cancel:** only `PENDING_PAYMENT` bookings; the seats are released, then the booking becomes `CANCELLED`. A cancelled booking is returned unchanged on repeat, even with a new idempotency key; a confirmed one gets `409 ILLEGAL_STATE_TRANSITION`; another user's gets 404. The endpoint sits behind the idempotency filter like every booking `POST`.
+  - **History:** `GET /bookings` returns the current user's bookings newest first, with an optional `status` filter, `page`/`size` (size 1–50) and `totalItems` (schema `BookingPage`).
+- **Why this approach:**
+  - **Release first, then mark cancelled:** inventory is the authority on seats. If payment already confirmed the hold, inventory refuses the release and the booking stays as it is for the saga to confirm. Marking the booking first would leave a "cancelled" booking whose seats were sold and paid for.
+  - **Optimistic-lock retry:** a webhook or the expiry path may update the booking between load and save; the use case reloads and decides again (up to 3 times) instead of overwriting.
+  - **History reads only booking tables**, thanks to the seat copies from P3.2: no fan-out to inventory, and it works when inventory is slow or down. Paging happens on bookings, so a page of 20 bookings is 20 bookings, not 20 seat rows.
+- **Alternatives considered:**
+  - **Mark cancelled, then release:** described above; it can cancel a booking that was just paid for.
+  - **Keyset pagination (`created_at < cursor`):** better for deep pages, but offset paging matches the API contract and a user's history is small.
+- **How it was verified:** `CancelAndHistoryIT`, 8 cases: cancel frees the seats and they can be booked again; repeat cancel with a new key; confirmed booking can't be cancelled; a hold already confirmed by payment refuses the cancel and the booking stays pending; another user gets 404; missing key 400; history order, paging, status filter and isolation from other users; size 51 → 400. Full `mvn verify`: 194 tests, 0 failures, 1 skipped (the opt-in benchmark).
+- **ADR:** none
+
+**Phase 3 complete:**
+- **Bookings:** a booking wraps one inventory hold, through booking's own port, with a seven-state lifecycle enforced in the domain.
+- **Exactly once:** retries and concurrent duplicates of one request create one booking and get the same answer.
+- **User actions:** cancel while pending, and a paged history that never calls inventory.

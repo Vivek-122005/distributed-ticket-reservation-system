@@ -65,6 +65,30 @@ class JdbcBookingStore implements BookingStore {
                         .addValue("id", booking.id()).addValue("version", booking.version())) == 1;
     }
 
+    @Override
+    public List<Booking> findByUser(UUID userId, BookingStatus status, int offset, int limit) {
+        MapSqlParameterSource params = filter(userId, status).addValue("offset", offset).addValue("limit", limit);
+        // Page over bookings first (index idx_bookings_user), then join only those bookings' seat lines.
+        return query("""
+                WHERE b.id IN (SELECT id FROM booking.bookings WHERE user_id = :user
+                               AND (CAST(:status AS VARCHAR) IS NULL OR status = :status)
+                               ORDER BY created_at DESC, id LIMIT :limit OFFSET :offset)""", params,
+                "b.created_at DESC, b.id, ");
+    }
+
+    @Override
+    public long countByUser(UUID userId, BookingStatus status) {
+        Long count = jdbc.queryForObject("""
+                SELECT count(*) FROM booking.bookings
+                WHERE user_id = :user AND (CAST(:status AS VARCHAR) IS NULL OR status = :status)""",
+                filter(userId, status), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    private static MapSqlParameterSource filter(UUID userId, BookingStatus status) {
+        return new MapSqlParameterSource().addValue("user", userId).addValue("status", status == null ? null : status.name());
+    }
+
     /** One joined row: a booking's columns plus one of its seat lines. */
     private record Row(UUID id, UUID userId, UUID showId, UUID holdId, BookingStatus status, long amountMinor,
                        String currency, Instant holdExpiresAt, Instant createdAt, long version, BookingSeat seat) { }

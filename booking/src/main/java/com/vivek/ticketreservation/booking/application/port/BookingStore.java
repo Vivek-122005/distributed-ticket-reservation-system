@@ -1,7 +1,9 @@
 package com.vivek.ticketreservation.booking.application.port;
 
 import com.vivek.ticketreservation.booking.domain.Booking;
+import com.vivek.ticketreservation.booking.domain.BookingStatus;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,4 +21,8 @@ public interface BookingStore {
      */
     boolean updateStatus(Booking booking);
 
+    /** A user's bookings, newest first; {@code status} null means any (P3.8). */
+    List<Booking> findByUser(UUID userId, BookingStatus status, int offset, int limit);
+
+    long countByUser(UUID userId, BookingStatus status);
 }
